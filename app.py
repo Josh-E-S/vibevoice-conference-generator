@@ -577,7 +577,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                         gr.HTML("""
                         <div style="text-align: center;">
                             <div style="margin: 20px 0;">
-                                <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.png" 
+                                <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.jpg" 
                                     style="max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"
                                     alt="VibeVoice Architecture Diagram">
                             </div>
