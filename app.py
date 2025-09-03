@@ -475,7 +475,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                         - **Model Sizes**: 1.1B, 1.5B, and Large variants
                         """)
                     
-                    with gr.Column():
+                    with gr.Column(scale=2):
                         gr.HTML("""
                         <div style="text-align: center; margin: 20px 0;">
                             <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.png" 
