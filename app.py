@@ -10,9 +10,9 @@ import threading
 from spaces import GPU
 from datetime import datetime
 
-from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
-from vibevoice.modular.streamer import AudioStreamer
+from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+from processor.vibevoice_processor import VibeVoiceProcessor
+from modular.streamer import AudioStreamer
 from transformers.utils import logging
 from transformers import set_seed
 

@@ -9,10 +9,10 @@ import re
 import torch
 from typing import Dict, List, Tuple
 
-from vibevoice.modular.configuration_vibevoice import (
+from modular.configuration_vibevoice import (
     VibeVoiceConfig
 )
-from vibevoice.modular.modeling_vibevoice import VibeVoiceForConditionalGeneration
+from modular.modeling_vibevoice import VibeVoiceForConditionalGeneration
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
