@@ -288,7 +288,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
         theme=theme,
     ) as interface:
 
-# Simple banner image - responsive and clean
+        # Simple image
         gr.HTML("""
         <div style="width: 100%; margin-bottom: 20px;">
             <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/banner.png" 
@@ -296,16 +296,16 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                 alt="Canary-Qwen Transcriber Banner">
         </div>
         """)
-        gr.Markdown("## Upload audio, use a sample track, or record yourself then ask questions about the transcript.")
-        gr.Markdown('''NVIDIA NeMo Canary-Qwen-2.5B is an English speech recognition model that achieves state-of-the art 
-                    performance on multiple English speech benchmarks. With 2.5 billion parameters and running at 418 RTFx, 
-                    Canary-Qwen-2.5B supports automatic speech-to-text recognition (ASR) in English with punctuation and capitalization 
-                    (PnC). The model works in two modes: as a transcription tool (ASR mode) and as an LLM (LLM mode). In ASR mode, the 
-                    model is only capable of transcribing the speech into text, but does not retain any LLM-specific skills such as reasoning. 
-                    In LLM mode, the model retains all of the original LLM capabilities, which can be used to post-process the transcript, e.g. 
-                    summarize it or answer questions about it. In LLM mode, the model does not "understand" the raw audio anymore - only 
-                    its transcript. This model is ready for commercial use.''')
-
+        gr.Markdown("# Upload audio, use a sample track, or record yourself then ask questions about the transcript.")
+        gr.Markdown('''VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, 
+                    such as podcasts, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, particularly 
+                    in scalability, speaker consistency, and natural turn-taking. A core innovation of VibeVoice is its use of continuous 
+                    speech tokenizers (Acoustic and Semantic) operating at an ultra-low frame rate of 7.5 Hz. These tokenizers efficiently 
+                    preserve audio fidelity while significantly boosting computational efficiency for processing long sequences. VibeVoice 
+                    employs a next-token diffusion framework, leveraging a Large Language Model (LLM) to understand textual context and 
+                    dialogue flow,and a diffusion head to generate high-fidelity acoustic details. The model can synthesize speech up to 
+                    90 minutes long with up to 4 distinct speakers, surpassing the typical 1-2 speaker limits of many prior models.''')
+    with gr.Tabs():
         with gr.Row():
             with gr.Column(scale=1, elem_classes="settings-card"):
                 gr.Markdown("### 🎛️ Podcast Settings")
