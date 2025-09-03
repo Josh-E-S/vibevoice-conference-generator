@@ -278,6 +278,26 @@ theme = gr.themes.Ocean(
     button_large_radius='*radius_sm'
 )
 
+def set_working_state(*components, transcript_box=None):
+    """
+    Disable all interactive components and show progress in transcript/log box.
+    Usage: set_working_state(generate_btn, random_example_btn, transcript_box=log_output)
+    """
+    updates = [gr.update(interactive=False) for _ in components]
+    if transcript_box is not None:
+        updates.append(gr.update(value="Generating... please wait", interactive=False))
+    return tuple(updates)
+
+def set_idle_state(*components, transcript_box=None):
+    """
+    Re-enable all interactive components and transcript/log box.
+    Usage: set_idle_state(generate_btn, random_example_btn, transcript_box=log_output)
+    """
+    updates = [gr.update(interactive=True) for _ in components]
+    if transcript_box is not None:
+        updates.append(gr.update(interactive=True))
+    return tuple(updates)
+    
 
 def create_demo_interface(demo_instance: VibeVoiceDemo):
     custom_css = """ """
@@ -352,7 +372,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     with gr.Column(scale=2, elem_classes="generation-card"):
                         gr.Markdown("### Script Input")
                         script_input = gr.Textbox(
-                            label="Conversation Script",
+                            label="Conversation Script (Estimated duration will appear here)",
                             placeholder="Enter your podcast script here...",
                             lines=12,
                             max_lines=20,
@@ -394,6 +414,37 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     inputs=[num_speakers],
                     outputs=speaker_selections
                 )
+                
+                def update_script_label(script_text):
+                    if not script_text or script_text.strip() == "":
+                        return gr.update(label="Conversation Script (Estimated duration will appear here)")
+                    
+                    words = script_text.split()
+                    word_count = len(words)
+                    wpm = 150
+                    estimated_minutes = word_count / wpm
+                    
+                    if estimated_minutes < 1:
+                        duration_str = f"{int(estimated_minutes * 60)} seconds"
+                    else:
+                        minutes = int(estimated_minutes)
+                        seconds = int((estimated_minutes - minutes) * 60)
+                        if seconds > 0:
+                            duration_str = f"{minutes} min {seconds} sec"
+                        else:
+                            duration_str = f"{minutes} min"
+                    
+                    warning = ""
+                    if estimated_minutes * 60 > 90:
+                        warning = " ⚠️ May exceed ZeroGPU timeout"
+                    
+                    return gr.update(label=f"Conversation Script - {word_count} words, ~{duration_str}{warning}")
+                
+                script_input.change(
+                    fn=update_script_label,
+                    inputs=[script_input],
+                    outputs=[script_input]
+                )
 
                 def generate_podcast_wrapper(model_choice, num_speakers, script, *speakers_and_params):
                     try:
@@ -414,11 +465,27 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                         traceback.print_exc()
                         return None, f"Error: {str(e)}"
 
-                generate_btn.click(
+                def on_generate_start():
+                    return gr.update(interactive=False), gr.update(interactive=False), gr.update(value="🔄 Initializing generation...\n⏳ This may take up to 2 minutes depending on script length...")
+                
+                def on_generate_complete(audio, log):
+                    return gr.update(interactive=True), gr.update(interactive=True), audio, log
+                
+                generate_click = generate_btn.click(
+                    fn=on_generate_start,
+                    inputs=[],
+                    outputs=[generate_btn, random_example_btn, log_output],
+                    queue=False
+                ).then(
                     fn=generate_podcast_wrapper,
                     inputs=[model_dropdown, num_speakers, script_input] + speaker_selections + [cfg_scale],
                     outputs=[complete_audio_output, log_output],
                     queue=True
+                ).then(
+                    fn=lambda: (gr.update(interactive=True), gr.update(interactive=True)),
+                    inputs=[],
+                    outputs=[generate_btn, random_example_btn],
+                    queue=False
                 )
 
                 def load_random_example():
