@@ -1,7 +1,7 @@
 spaces
 torch
 accelerate==1.6.0
-transformers
+transformers==4.51.3
 diffusers
 tqdm
 numpy
