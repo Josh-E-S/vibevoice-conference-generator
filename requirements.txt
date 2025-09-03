@@ -3,7 +3,6 @@ torch
 accelerate==1.6.0
 transformers
 diffusers
-flash-attn
 tqdm
 numpy
 scipy
