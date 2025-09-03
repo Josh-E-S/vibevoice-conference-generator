@@ -106,7 +106,7 @@ class VibeVoiceDemo:
                          cfg_scale: float = 1.3,
                          model_name: str = None):
         """
-        Generates a podcast as a single audio file from a script and saves it.
+        Generates a conference as a single audio file from a script and saves it.
         Non-streaming.
         """
         try:
@@ -140,7 +140,7 @@ class VibeVoiceDemo:
                 if not speaker_name or speaker_name not in self.available_voices:
                     raise gr.Error(f"Error: Please select a valid speaker for Speaker {i+1}.")
 
-            log = f"Generating podcast with {num_speakers} speakers\n"
+            log = f"Generating conference with {num_speakers} speakers\n"
             log += f"Model: {model_name}\n"
             log += f"Parameters: CFG Scale={cfg_scale}\n"
             log += f"Speakers: {', '.join(selected_speakers)}\n"
@@ -204,14 +204,14 @@ class VibeVoiceDemo:
             output_dir = "outputs"
             os.makedirs(output_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_path = os.path.join(output_dir, f"podcast_{timestamp}.wav")
+            file_path = os.path.join(output_dir, f"conference_{timestamp}.wav")
             sf.write(file_path, audio, sample_rate)
-            print(f"Podcast saved to {file_path}")
+            print(f"Conference saved to {file_path}")
 
             total_duration = len(audio) / sample_rate
             log += f"Generation completed in {generation_time:.2f} seconds\n"
             log += f"Final audio duration: {total_duration:.2f} seconds\n"
-            log += f"Successfully saved podcast to: {file_path}\n"
+            log += f"Successfully saved conference to: {file_path}\n"
 
             self.is_generating = False
             return (sample_rate, audio), log
@@ -318,7 +318,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
         """)
         gr.Markdown("# Upload audio, use a sample track, or record yourself then ask questions about the transcript.")
         gr.Markdown('''VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, 
-                    such as podcasts, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, particularly 
+                    such as conferences, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, particularly 
                     in scalability, speaker consistency, and natural turn-taking. A core innovation of VibeVoice is its use of continuous 
                     speech tokenizers (Acoustic and Semantic) operating at an ultra-low frame rate of 7.5 Hz. These tokenizers efficiently 
                     preserve audio fidelity while significantly boosting computational efficiency for processing long sequences. VibeVoice 
@@ -328,9 +328,9 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
         
         with gr.Tabs():
             with gr.Tab("Generate"):
-                gr.Markdown("### 🎵 Generated Podcast")
+                gr.Markdown("### Generated Conference")
                 complete_audio_output = gr.Audio(
-                    label="Complete Podcast (Download)",
+                    label="Complete Conference (Download)",
                     type="numpy",
                     elem_classes="audio-output complete-audio-section",
                     autoplay=False,
@@ -340,7 +340,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                 
                 with gr.Row():
                     with gr.Column(scale=1, elem_classes="settings-card"):
-                        gr.Markdown("### Podcast Settings")
+                        gr.Markdown("### Conference Settings")
 
                         # NEW - model dropdown
                         model_dropdown = gr.Dropdown(
@@ -383,7 +383,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                         gr.Markdown("### Script Input")
                         script_input = gr.Textbox(
                             label="Conversation Script (Estimated duration will appear here)",
-                            placeholder="Enter your podcast script here...",
+                            placeholder="Enter your conference script here...",
                             lines=12,
                             max_lines=20,
                             elem_classes="script-input"
@@ -395,11 +395,11 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                                 variant="secondary", elem_classes="random-btn", scale=1
                             )
                             generate_btn = gr.Button(
-                                "🚀 Generate Podcast", size="lg",
+                                "🚀 Generate Conference", size="lg",
                                 variant="primary", elem_classes="generate-btn", scale=2
                             )
 
-                        gr.Markdown("### 📚 Example Scripts")
+                        gr.Markdown("### Example Scripts")
                         
                         example_names = [
                             "AI TED Talk",
@@ -457,13 +457,9 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                             duration_str = f"{minutes} min {seconds} sec"
                         else:
                             duration_str = f"{minutes} min"
-                    
-                    warning = ""
-                    if estimated_minutes * 60 > 90:
-                        warning = " ⚠️ May exceed ZeroGPU timeout"
-                    
-                    return gr.update(label=f"Conversation Script - {word_count} words, ~{duration_str}{warning}")
-                
+
+                    return gr.update(label=f"Conversation Script - {word_count} words, ~{duration_str}")
+
                 script_input.change(
                     fn=update_script_label,
                     inputs=[script_input],
@@ -517,7 +513,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     if demo_instance.example_scripts:
                         num_speakers_value, script_value = random.choice(demo_instance.example_scripts)
                         return num_speakers_value, script_value
-                    return 2, "Speaker 0: Welcome to our AI podcast demo!\nSpeaker 1: Thanks, excited to be here!"
+                    return 2, "Speaker 0: Welcome to our AI conference demo!\nSpeaker 1: Thanks, excited to be here!"
 
                 random_example_btn.click(
                     fn=load_random_example,
@@ -549,7 +545,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                         ### Overview
                         
                         VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, 
-                        such as podcasts, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, 
+                        such as conferences, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, 
                         particularly in scalability, speaker consistency, and natural turn-taking.
                         
                         ### Training Architecture
