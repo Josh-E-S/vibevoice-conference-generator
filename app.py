@@ -401,24 +401,27 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
 
                         gr.Markdown("### 📚 Example Scripts")
                         
-                        example_scripts_dict = {
-                            "Software Product Meeting": [2, "Speaker 0: Hey team, let's discuss the new feature roadmap for Q2.\nSpeaker 1: Great! I've been analyzing user feedback from last quarter.\nSpeaker 0: What are the top requested features?\nSpeaker 1: Users want better mobile integration and real-time collaboration tools.\nSpeaker 0: That aligns with our vision. Let's prioritize those for the next sprint."],
-                            "Climate Change Podcast": [2, "Speaker 0: Welcome to Climate Conversations. Today we're discussing renewable energy transitions.\nSpeaker 1: Thanks for having me. This is such a critical topic for our future.\nSpeaker 0: Can you explain the current state of renewable adoption?\nSpeaker 1: Globally, we're seeing exponential growth in solar and wind capacity.\nSpeaker 0: What are the main challenges we still face?\nSpeaker 1: Energy storage and grid infrastructure are the key bottlenecks."],
-                            "Tech News Brief": [1, "Speaker 0: Here's your daily tech update. AI continues to transform industries worldwide. Major companies are investing billions in generative AI research. Meanwhile, quantum computing reaches new milestones with error correction breakthroughs. In cybersecurity news, new encryption standards are being developed to prepare for quantum threats."],
-                            "Educational Tutorial": [2, "Speaker 0: Today we'll learn about machine learning basics.\nSpeaker 1: I'm excited but nervous. Is it really that complex?\nSpeaker 0: Not at all! Let's start with a simple example.\nSpeaker 1: Okay, I'm ready to learn.\nSpeaker 0: Think of it like teaching a computer to recognize patterns."],
-                            "Comedy Sketch": [3, "Speaker 0: Did you hear about the AI that tried to write jokes?\nSpeaker 1: Oh no, not another AI story!\nSpeaker 2: Wait, let me guess - the punchlines were too logical?\nSpeaker 0: Exactly! It kept explaining why things were funny instead of being funny.\nSpeaker 1: That's hilarious! Or should I explain why it's hilarious?\nSpeaker 2: Please don't, you'll turn into the AI!"],
-                            "Interview Format": [2, "Speaker 0: Welcome to our show. Today we have a special guest, a leading expert in biotechnology.\nSpeaker 1: Thank you for having me. It's great to be here.\nSpeaker 0: Tell us about your latest research.\nSpeaker 1: We're developing new therapies using CRISPR technology.\nSpeaker 0: How will this impact patient care?\nSpeaker 1: We expect to see personalized treatments become much more accessible."]
-                        }
+                        example_names = [
+                            "AI TED Talk",
+                            "Political Speech",
+                            "Finance IPO Meeting",
+                            "Telehealth Meeting",
+                            "Military Meeting",
+                            "Oil Meeting",
+                            "Game Creation Meeting",
+                            "Product Meeting"
+                        ]
+                        
+                        example_buttons = []
+                        with gr.Row():
+                            for i in range(min(4, len(example_names))):
+                                btn = gr.Button(example_names[i], size="sm", variant="secondary")
+                                example_buttons.append(btn)
                         
                         with gr.Row():
-                            example_btn1 = gr.Button("Software Product Meeting", size="sm", variant="secondary")
-                            example_btn2 = gr.Button("Climate Change Podcast", size="sm", variant="secondary")
-                            example_btn3 = gr.Button("Tech News Brief", size="sm", variant="secondary")
-                        
-                        with gr.Row():
-                            example_btn4 = gr.Button("Educational Tutorial", size="sm", variant="secondary")
-                            example_btn5 = gr.Button("Comedy Sketch", size="sm", variant="secondary")
-                            example_btn6 = gr.Button("Interview Format", size="sm", variant="secondary")
+                            for i in range(4, min(8, len(example_names))):
+                                btn = gr.Button(example_names[i], size="sm", variant="secondary")
+                                example_buttons.append(btn)
                         
                         log_output = gr.Textbox(
                             label="Generation Log",
@@ -511,9 +514,10 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
 
                 def load_random_example():
                     import random
-                    example_name = random.choice(list(example_scripts_dict.keys()))
-                    num_speakers_value, script_value = example_scripts_dict[example_name]
-                    return num_speakers_value, script_value
+                    if demo_instance.example_scripts:
+                        num_speakers_value, script_value = random.choice(demo_instance.example_scripts)
+                        return num_speakers_value, script_value
+                    return 2, "Speaker 0: Welcome to our AI podcast demo!\nSpeaker 1: Thanks, excited to be here!"
 
                 random_example_btn.click(
                     fn=load_random_example,
@@ -522,53 +526,19 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     queue=False
                 )
                 
-                def load_specific_example(example_name):
-                    if example_name in example_scripts_dict:
-                        num_speakers_value, script_value = example_scripts_dict[example_name]
+                def load_specific_example(idx):
+                    if idx < len(demo_instance.example_scripts):
+                        num_speakers_value, script_value = demo_instance.example_scripts[idx]
                         return num_speakers_value, script_value
                     return 2, ""
                 
-                example_btn1.click(
-                    fn=lambda: load_specific_example("Software Product Meeting"),
-                    inputs=[],
-                    outputs=[num_speakers, script_input],
-                    queue=False
-                )
-                
-                example_btn2.click(
-                    fn=lambda: load_specific_example("Climate Change Podcast"),
-                    inputs=[],
-                    outputs=[num_speakers, script_input],
-                    queue=False
-                )
-                
-                example_btn3.click(
-                    fn=lambda: load_specific_example("Tech News Brief"),
-                    inputs=[],
-                    outputs=[num_speakers, script_input],
-                    queue=False
-                )
-                
-                example_btn4.click(
-                    fn=lambda: load_specific_example("Educational Tutorial"),
-                    inputs=[],
-                    outputs=[num_speakers, script_input],
-                    queue=False
-                )
-                
-                example_btn5.click(
-                    fn=lambda: load_specific_example("Comedy Sketch"),
-                    inputs=[],
-                    outputs=[num_speakers, script_input],
-                    queue=False
-                )
-                
-                example_btn6.click(
-                    fn=lambda: load_specific_example("Interview Format"),
-                    inputs=[],
-                    outputs=[num_speakers, script_input],
-                    queue=False
-                )
+                for idx, btn in enumerate(example_buttons):
+                    btn.click(
+                        fn=lambda i=idx: load_specific_example(i),
+                        inputs=[],
+                        outputs=[num_speakers, script_input],
+                        queue=False
+                    )
             
             with gr.Tab("Architecture"):
                 with gr.Row():
