@@ -1,5 +1,5 @@
 spaces
-torch
+# torch is pre-installed in HF Spaces Docker image
 accelerate==1.6.0
 transformers
 diffusers
