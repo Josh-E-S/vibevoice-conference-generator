@@ -449,36 +449,38 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                 )
             
             with gr.Tab("Architecture"):
-                gr.Markdown("## VibeVoice Architecture")
-                gr.Markdown("""
-                ### Model Components
-                
-                VibeVoice consists of several key components:
-                
-                1. **Continuous Speech Tokenizers**: Operating at 7.5 Hz for efficiency
-                   - Acoustic Tokenizer: Preserves audio fidelity
-                   - Semantic Tokenizer: Captures speech content
-                
-                2. **Large Language Model Backbone**: Understanding context and dialogue flow
-                
-                3. **Diffusion Head**: Generating high-fidelity acoustic details
-                
-                4. **Multi-Speaker Support**: Up to 4 distinct speakers
-                
-                ### Technical Specifications
-                - **Sample Rate**: 24kHz
-                - **Max Duration**: 90 minutes
-                - **Speaker Capacity**: 1-4 speakers
-                - **Model Sizes**: 1.1B, 1.5B, and Large variants
-                """)
-                
-                gr.HTML("""
-                <div style="text-align: center; margin: 20px 0;">
-                    <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.png" 
-                         style="max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"
-                         alt="VibeVoice Architecture Diagram">
-                </div>
-                """)
+                with gr.Row():
+                    gr.Markdown("## VibeVoice Architecture")
+                    
+                    gr.Markdown("""
+                    ### Model Components
+                    
+                    VibeVoice consists of several key components:
+                    
+                    1. **Continuous Speech Tokenizers**: Operating at 7.5 Hz for efficiency
+                    - Acoustic Tokenizer: Preserves audio fidelity
+                    - Semantic Tokenizer: Captures speech content
+                    
+                    2. **Large Language Model Backbone**: Understanding context and dialogue flow
+                    
+                    3. **Diffusion Head**: Generating high-fidelity acoustic details
+                    
+                    4. **Multi-Speaker Support**: Up to 4 distinct speakers
+                    
+                    ### Technical Specifications
+                    - **Sample Rate**: 24kHz
+                    - **Max Duration**: 90 minutes
+                    - **Speaker Capacity**: 1-4 speakers
+                    - **Model Sizes**: 1.1B, 1.5B, and Large variants
+                    """)
+                    
+                    gr.HTML("""
+                    <div style="text-align: center; margin: 20px 0;">
+                        <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.png" 
+                            style="max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"
+                            alt="VibeVoice Architecture Diagram">
+                    </div>
+                    """)
 
     return interface
 
