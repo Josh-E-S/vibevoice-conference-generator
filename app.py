@@ -451,36 +451,74 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
             with gr.Tab("Architecture"):
                 with gr.Row():
                     with gr.Column():
-                        gr.Markdown("## VibeVoice Architecture")
+                        gr.Markdown("## VibeVoice: A Frontier Open-Source Text-to-Speech Model")
 
                         gr.Markdown("""
-                        ### Model Components
-
-                        VibeVoice consists of several key components:
+                        ### Overview
                         
-                        1. **Continuous Speech Tokenizers**: Operating at 7.5 Hz for efficiency
-                        - Acoustic Tokenizer: Preserves audio fidelity
-                        - Semantic Tokenizer: Captures speech content
+                        VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, 
+                        such as podcasts, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, 
+                        particularly in scalability, speaker consistency, and natural turn-taking.
                         
-                        2. **Large Language Model Backbone**: Understanding context and dialogue flow
+                        ### Training Architecture
                         
-                        3. **Diffusion Head**: Generating high-fidelity acoustic details
+                        **Transformer-based Large Language Model** integrated with specialized acoustic and semantic tokenizers and a diffusion-based decoding head.
                         
-                        4. **Multi-Speaker Support**: Up to 4 distinct speakers
+                        **Core Components:**
+                        - **LLM**: Qwen2.5-1.5B for this release
+                        - **Acoustic Tokenizer**: Based on a σ-VAE variant with mirror-symmetric encoder-decoder structure (~340M parameters each)
+                          - 7 stages of modified Transformer blocks
+                          - Achieves 3200x downsampling from 24kHz input
+                        - **Semantic Tokenizer**: Encoder mirrors the Acoustic Tokenizer's architecture
+                          - Trained with an ASR proxy task
+                        - **Diffusion Head**: Lightweight module (4 layers, ~123M parameters)
+                          - Conditioned on LLM hidden states
+                          - Uses DDPM process with Classifier-Free Guidance
+                        
+                        ### Training Details
+                        
+                        **Context Length**: Trained with curriculum up to 65,536 tokens
+                        
+                        **Training Stages:**
+                        1. **Tokenizer Pre-training**: Acoustic and Semantic tokenizers trained separately
+                        2. **VibeVoice Training**: Frozen tokenizers, only LLM and diffusion head trained
+                           - Curriculum learning: 4k → 16K → 32K → 64K tokens
+                        
+                        ### Model Variants
+                        
+                        | Model | Context Length | Generation Length | Parameters |
+                        |-------|---------------|-------------------|------------|
+                        | VibeVoice-0.5B-Streaming | - | - | Coming Soon |
+                        | **VibeVoice-1.5B** | 64K | ~90 min | 2.7B |
+                        | VibeVoice-Large | 32K | ~45 min | Available |
                         
                         ### Technical Specifications
-                        - **Sample Rate**: 24kHz
-                        - **Max Duration**: 90 minutes
-                        - **Speaker Capacity**: 1-4 speakers
-                        - **Model Sizes**: 1.1B, 1.5B, and Large variants
+                        - **Frame Rate**: Ultra-low 7.5 Hz for efficiency
+                        - **Sample Rate**: 24kHz audio output
+                        - **Max Duration**: Up to 90 minutes
+                        - **Speaker Capacity**: 1-4 distinct speakers
+                        - **Languages**: English and Chinese
+                        
+                        ### Key Innovations
+                        - Continuous speech tokenizers at ultra-low frame rate
+                        - Next-token diffusion framework
+                        - Curriculum learning for long-form generation
+                        - Multi-speaker consistency without explicit modeling
                         """)
                     
                     with gr.Column(scale=2):
                         gr.HTML("""
-                        <div style="text-align: center; margin: 20px 0;">
-                            <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.png" 
-                                style="max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"
-                                alt="VibeVoice Architecture Diagram">
+                        <div style="text-align: center;">
+                            <div style="margin: 20px 0;">
+                                <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.png" 
+                                    style="max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"
+                                    alt="VibeVoice Architecture Diagram">
+                            </div>
+                            <div style="margin: 20px 0;">
+                                <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/chart.png" 
+                                    style="max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"
+                                    alt="VibeVoice Performance Chart">
+                            </div>
                         </div>
                         """)
 
