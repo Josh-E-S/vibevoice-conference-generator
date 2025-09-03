@@ -472,10 +472,11 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                 - **Model Sizes**: 1.1B, 1.5B, and Large variants
                 """)
                 
-                # You can add an architecture diagram here
                 gr.HTML("""
                 <div style="text-align: center; margin: 20px 0;">
-                    <p style="color: #666;">Architecture diagram placeholder - add your diagram image here</p>
+                    <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.png" 
+                         style="max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"
+                         alt="VibeVoice Architecture Diagram">
                 </div>
                 """)
 
