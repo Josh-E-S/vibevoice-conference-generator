@@ -1,5 +1,5 @@
 spaces
-# torch is pre-installed in HF Spaces Docker image
+torch
 accelerate==1.6.0
 transformers
 diffusers
@@ -17,5 +17,4 @@ librosa
 pydub
 requests
 python-dotenv
-git+https://github.com/microsoft/VibeVoice.git
 
