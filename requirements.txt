@@ -1,24 +1,15 @@
-# Core dependencies
-torch
-numpy
-scipy
-
-# Audio/Video processing
-librosa
-soundfile
+absl-py
+accelerate==1.6.0
 aiortc
 av
-
-# ML packages
-accelerate==1.6.0
 diffusers
-transformers
 flash-attn
-
-# Other utilities
-absl-py
+librosa
 ml-collections
+numpy
+scipy
+soundfile
+torch
 tqdm
-
-# VibeVoice
+transformers
 git+https://github.com/microsoft/VibeVoice.git
