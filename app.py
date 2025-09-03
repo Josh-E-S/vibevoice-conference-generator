@@ -306,145 +306,178 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     dialogue flow,and a diffusion head to generate high-fidelity acoustic details. The model can synthesize speech up to 
                     90 minutes long with up to 4 distinct speakers, surpassing the typical 1-2 speaker limits of many prior models.''')
         
-        with gr.Row():
-            with gr.Column(scale=1, elem_classes="settings-card"):
-                gr.Markdown("### 🎛️ Podcast Settings")
-
-                # NEW - model dropdown
-                model_dropdown = gr.Dropdown(
-                    choices=list(demo_instance.models.keys()),
-                    value=demo_instance.current_model_name,
-                    label="Model",
-                )
-
-                num_speakers = gr.Slider(
-                    minimum=1, maximum=4, value=2, step=1,
-                    label="Number of Speakers",
-                    elem_classes="slider-container"
-                )
-
-                gr.Markdown("### 🎭 Speaker Selection")
-                available_speaker_names = list(demo_instance.available_voices.keys())
-                default_speakers = ['en-Alice_woman', 'en-Carter_man', 'en-Frank_man', 'en-Maya_woman']
-
-                speaker_selections = []
-                for i in range(4):
-                    default_value = default_speakers[i] if i < len(default_speakers) else None
-                    speaker = gr.Dropdown(
-                        choices=available_speaker_names,
-                        value=default_value,
-                        label=f"Speaker {i+1}",
-                        visible=(i < 2),
-                        elem_classes="speaker-item"
-                    )
-                    speaker_selections.append(speaker)
-
-                gr.Markdown("### ⚙️ Advanced Settings")
-                with gr.Accordion("Generation Parameters", open=False):
-                    cfg_scale = gr.Slider(
-                        minimum=1.0, maximum=2.0, value=1.3, step=0.05,
-                        label="CFG Scale (Guidance Strength)",
-                        elem_classes="slider-container"
-                    )
-
-            with gr.Column(scale=2, elem_classes="generation-card"):
-                gr.Markdown("### 📝 Script Input")
-                script_input = gr.Textbox(
-                    label="Conversation Script",
-                    placeholder="Enter your podcast script here...",
-                    lines=12,
-                    max_lines=20,
-                    elem_classes="script-input"
-                )
-
+        with gr.Tabs():
+            with gr.Tab("Generate"):
                 with gr.Row():
-                    random_example_btn = gr.Button(
-                        "🎲 Random Example", size="lg",
-                        variant="secondary", elem_classes="random-btn", scale=1
-                    )
-                    generate_btn = gr.Button(
-                        "🚀 Generate Podcast", size="lg",
-                        variant="primary", elem_classes="generate-btn", scale=2
-                    )
+                    with gr.Column(scale=1, elem_classes="settings-card"):
+                        gr.Markdown("### 🎛️ Podcast Settings")
 
-                gr.Markdown("### 🎵 Generated Podcast")
-                complete_audio_output = gr.Audio(
-                    label="Complete Podcast (Download)",
-                    type="numpy",
-                    elem_classes="audio-output complete-audio-section",
-                    autoplay=False,
-                    show_download_button=True,
-                    visible=True
+                        # NEW - model dropdown
+                        model_dropdown = gr.Dropdown(
+                            choices=list(demo_instance.models.keys()),
+                            value=demo_instance.current_model_name,
+                            label="Model",
+                        )
+
+                        num_speakers = gr.Slider(
+                            minimum=1, maximum=4, value=2, step=1,
+                            label="Number of Speakers",
+                            elem_classes="slider-container"
+                        )
+
+                        gr.Markdown("### 🎭 Speaker Selection")
+                        available_speaker_names = list(demo_instance.available_voices.keys())
+                        default_speakers = ['en-Alice_woman', 'en-Carter_man', 'en-Frank_man', 'en-Maya_woman']
+
+                        speaker_selections = []
+                        for i in range(4):
+                            default_value = default_speakers[i] if i < len(default_speakers) else None
+                            speaker = gr.Dropdown(
+                                choices=available_speaker_names,
+                                value=default_value,
+                                label=f"Speaker {i+1}",
+                                visible=(i < 2),
+                                elem_classes="speaker-item"
+                            )
+                            speaker_selections.append(speaker)
+
+                        gr.Markdown("### ⚙️ Advanced Settings")
+                        with gr.Accordion("Generation Parameters", open=False):
+                            cfg_scale = gr.Slider(
+                                minimum=1.0, maximum=2.0, value=1.3, step=0.05,
+                                label="CFG Scale (Guidance Strength)",
+                                elem_classes="slider-container"
+                            )
+
+                    with gr.Column(scale=2, elem_classes="generation-card"):
+                        gr.Markdown("### 📝 Script Input")
+                        script_input = gr.Textbox(
+                            label="Conversation Script",
+                            placeholder="Enter your podcast script here...",
+                            lines=12,
+                            max_lines=20,
+                            elem_classes="script-input"
+                        )
+
+                        with gr.Row():
+                            random_example_btn = gr.Button(
+                                "🎲 Random Example", size="lg",
+                                variant="secondary", elem_classes="random-btn", scale=1
+                            )
+                            generate_btn = gr.Button(
+                                "🚀 Generate Podcast", size="lg",
+                                variant="primary", elem_classes="generate-btn", scale=2
+                            )
+
+                        gr.Markdown("### 🎵 Generated Podcast")
+                        complete_audio_output = gr.Audio(
+                            label="Complete Podcast (Download)",
+                            type="numpy",
+                            elem_classes="audio-output complete-audio-section",
+                            autoplay=False,
+                            show_download_button=True,
+                            visible=True
+                        )
+
+                        log_output = gr.Textbox(
+                            label="Generation Log",
+                            lines=8, max_lines=15,
+                            interactive=False,
+                            elem_classes="log-output"
+                        )
+
+                def update_speaker_visibility(num_speakers):
+                    return [gr.update(visible=(i < num_speakers)) for i in range(4)]
+
+                num_speakers.change(
+                    fn=update_speaker_visibility,
+                    inputs=[num_speakers],
+                    outputs=speaker_selections
                 )
 
-                log_output = gr.Textbox(
-                    label="Generation Log",
-                    lines=8, max_lines=15,
-                    interactive=False,
-                    elem_classes="log-output"
+                def generate_podcast_wrapper(model_choice, num_speakers, script, *speakers_and_params):
+                    try:
+                        speakers = speakers_and_params[:4]
+                        cfg_scale_val = speakers_and_params[4]
+                        audio, log = demo_instance.generate_podcast(
+                            num_speakers=int(num_speakers),
+                            script=script,
+                            speaker_1=speakers[0],
+                            speaker_2=speakers[1],
+                            speaker_3=speakers[2],
+                            speaker_4=speakers[3],
+                            cfg_scale=cfg_scale_val,
+                            model_name=model_choice
+                        )
+                        return audio, log
+                    except Exception as e:
+                        traceback.print_exc()
+                        return None, f"❌ Error: {str(e)}"
+
+                generate_btn.click(
+                    fn=generate_podcast_wrapper,
+                    inputs=[model_dropdown, num_speakers, script_input] + speaker_selections + [cfg_scale],
+                    outputs=[complete_audio_output, log_output],
+                    queue=True
                 )
 
-        def update_speaker_visibility(num_speakers):
-            return [gr.update(visible=(i < num_speakers)) for i in range(4)]
+                def load_random_example():
+                    import random
+                    examples = getattr(demo_instance, "example_scripts", [])
+                    if not examples:
+                        examples = [
+                            [2, "Speaker 0: Welcome to our AI podcast demo!\nSpeaker 1: Thanks, excited to be here!"]
+                        ]
+                    num_speakers_value, script_value = random.choice(examples)
+                    return num_speakers_value, script_value
 
-        num_speakers.change(
-            fn=update_speaker_visibility,
-            inputs=[num_speakers],
-            outputs=speaker_selections
-        )
-
-        def generate_podcast_wrapper(model_choice, num_speakers, script, *speakers_and_params):
-            try:
-                speakers = speakers_and_params[:4]
-                cfg_scale_val = speakers_and_params[4]
-                audio, log = demo_instance.generate_podcast(
-                    num_speakers=int(num_speakers),
-                    script=script,
-                    speaker_1=speakers[0],
-                    speaker_2=speakers[1],
-                    speaker_3=speakers[2],
-                    speaker_4=speakers[3],
-                    cfg_scale=cfg_scale_val,
-                    model_name=model_choice
+                random_example_btn.click(
+                    fn=load_random_example,
+                    inputs=[],
+                    outputs=[num_speakers, script_input],
+                    queue=False
                 )
-                return audio, log
-            except Exception as e:
-                traceback.print_exc()
-                return None, f"❌ Error: {str(e)}"
 
-        generate_btn.click(
-            fn=generate_podcast_wrapper,
-            inputs=[model_dropdown, num_speakers, script_input] + speaker_selections + [cfg_scale],
-            outputs=[complete_audio_output, log_output],
-            queue=True
-        )
-
-        def load_random_example():
-            import random
-            examples = getattr(demo_instance, "example_scripts", [])
-            if not examples:
-                examples = [
-                    [2, "Speaker 0: Welcome to our AI podcast demo!\nSpeaker 1: Thanks, excited to be here!"]
+                gr.Markdown("### 📚 Example Scripts")
+                examples = getattr(demo_instance, "example_scripts", []) or [
+                    [1, "Speaker 1: Welcome to our AI podcast demo. This is a sample script."]
                 ]
-            num_speakers_value, script_value = random.choice(examples)
-            return num_speakers_value, script_value
-
-        random_example_btn.click(
-            fn=load_random_example,
-            inputs=[],
-            outputs=[num_speakers, script_input],
-            queue=False
-        )
-
-        gr.Markdown("### 📚 Example Scripts")
-        examples = getattr(demo_instance, "example_scripts", []) or [
-            [1, "Speaker 1: Welcome to our AI podcast demo. This is a sample script."]
-        ]
-        gr.Examples(
-            examples=examples,
-            inputs=[num_speakers, script_input],
-            label="Try these example scripts:"
-        )
+                gr.Examples(
+                    examples=examples,
+                    inputs=[num_speakers, script_input],
+                    label="Try these example scripts:"
+                )
+            
+            with gr.Tab("Architecture"):
+                gr.Markdown("## VibeVoice Architecture")
+                gr.Markdown("""
+                ### Model Components
+                
+                VibeVoice consists of several key components:
+                
+                1. **Continuous Speech Tokenizers**: Operating at 7.5 Hz for efficiency
+                   - Acoustic Tokenizer: Preserves audio fidelity
+                   - Semantic Tokenizer: Captures speech content
+                
+                2. **Large Language Model Backbone**: Understanding context and dialogue flow
+                
+                3. **Diffusion Head**: Generating high-fidelity acoustic details
+                
+                4. **Multi-Speaker Support**: Up to 4 distinct speakers
+                
+                ### Technical Specifications
+                - **Sample Rate**: 24kHz
+                - **Max Duration**: 90 minutes
+                - **Speaker Capacity**: 1-4 speakers
+                - **Model Sizes**: 1.1B, 1.5B, and Large variants
+                """)
+                
+                # You can add an architecture diagram here
+                gr.HTML("""
+                <div style="text-align: center; margin: 20px 0;">
+                    <p style="color: #666;">Architecture diagram placeholder - add your diagram image here</p>
+                </div>
+                """)
 
     return interface
 
