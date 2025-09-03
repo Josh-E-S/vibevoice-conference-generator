@@ -1,4 +1,5 @@
 absl-py
+torch
 accelerate==1.6.0
 aiortc
 av
