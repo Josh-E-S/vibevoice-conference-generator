@@ -288,12 +288,23 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
         theme=theme,
     ) as interface:
 
+# Simple banner image - responsive and clean
         gr.HTML("""
-        <div class="main-header">
-            <h1>🎙️ Conference Generator</h1>
-            <p>Generating Long-form Multi-speaker AI Conferences with VibeVoice</p>
+        <div style="width: 100%; margin-bottom: 20px;">
+            <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/banner.png" 
+                style="width: 100%; height: auto; border-radius: 15px; box-shadow: 0 10px 40px rgba(0,0,0,0.2);"
+                alt="Canary-Qwen Transcriber Banner">
         </div>
         """)
+        gr.Markdown("## Upload audio, or record yourself then ask questions about the transcript.")
+        gr.Markdown('''NVIDIA NeMo Canary-Qwen-2.5B is an English speech recognition model that achieves state-of-the art 
+                    performance on multiple English speech benchmarks. With 2.5 billion parameters and running at 418 RTFx, 
+                    Canary-Qwen-2.5B supports automatic speech-to-text recognition (ASR) in English with punctuation and capitalization 
+                    (PnC). The model works in two modes: as a transcription tool (ASR mode) and as an LLM (LLM mode). In ASR mode, the 
+                    model is only capable of transcribing the speech into text, but does not retain any LLM-specific skills such as reasoning. 
+                    In LLM mode, the model retains all of the original LLM capabilities, which can be used to post-process the transcript, e.g. 
+                    summarize it or answer questions about it. In LLM mode, the model does not "understand" the raw audio anymore - only 
+                    its transcript. This model is ready for commercial use.''')
 
         with gr.Row():
             with gr.Column(scale=1, elem_classes="settings-card"):
