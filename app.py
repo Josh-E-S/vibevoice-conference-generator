@@ -269,24 +269,29 @@ def convert_to_16_bit_wav(data):
         data = data / np.max(np.abs(data))
     return (data * 32767).astype(np.int16)
 
+# Set synthwave theme
+theme = gr.themes.Ocean(
+    primary_hue="indigo",
+    secondary_hue="fuchsia",
+    neutral_hue="slate",
+).set(
+    button_large_radius='*radius_sm'
+)
+
 
 def create_demo_interface(demo_instance: VibeVoiceDemo):
     custom_css = """ """
 
     with gr.Blocks(
-        title="VibeVoice - AI Podcast Generator",
+        title="VibeVoice - Conference Generator",
         css=custom_css,
-        theme=gr.themes.Soft(
-            primary_hue="blue",
-            secondary_hue="purple",
-            neutral_hue="slate",
-        )
+        theme=theme,
     ) as interface:
 
         gr.HTML("""
         <div class="main-header">
-            <h1>🎙️ Vibe Podcasting</h1>
-            <p>Generating Long-form Multi-speaker AI Podcast with VibeVoice</p>
+            <h1>🎙️ Conference Generator</h1>
+            <p>Generating Long-form Multi-speaker AI Conferences with VibeVoice</p>
         </div>
         """)
 
