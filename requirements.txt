@@ -1,8 +1,9 @@
 spaces
 torch
 accelerate==1.6.0
-transformers==4.51.3
+transformers
 diffusers
+flash-attn
 tqdm
 numpy
 scipy
@@ -16,3 +17,5 @@ librosa
 pydub
 requests
 python-dotenv
+git+https://github.com/microsoft/VibeVoice.git
+
