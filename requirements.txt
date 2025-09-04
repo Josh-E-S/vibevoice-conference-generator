@@ -1,19 +1,11 @@
 spaces
 torch
-accelerate==1.6.0
-transformers==4.51.3
-diffusers
+accelerate
+git+https://github.com/huggingface/transformers.git@refs/pull/40546/head
 tqdm
 numpy
 scipy
-ml-collections
-absl-py
 gradio
-av
-aiortc
 soundfile
 librosa
-pydub
-requests
-python-dotenv
 
