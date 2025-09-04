@@ -46,6 +46,18 @@ class VibeVoiceDemo:
 
     def load_models(self):
         print("Loading processors and models on CPU...")
+        
+        # Debug: Show cache location
+        import os
+        cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        print(f"HuggingFace cache directory: {cache_dir}")
+        if os.path.exists(cache_dir):
+            print(f"Cache exists. Size: {sum(os.path.getsize(os.path.join(dirpath, filename)) for dirpath, _, filenames in os.walk(cache_dir) for filename in filenames) / (1024**3):.2f} GB")
+            print("Cached models:")
+            for item in os.listdir(cache_dir):
+                if item.startswith("models--"):
+                    print(f"  - {item}")
+        
         for name, path in self.model_paths.items():
             print(f" - {name} from {path}")
             proc = VibeVoiceProcessor.from_pretrained(path)
@@ -578,7 +590,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                         |-------|---------------|-------------------|------------|
                         | VibeVoice-0.5B-Streaming | - | - | Coming Soon |
                         | **VibeVoice-1.5B** | 64K | ~90 min | 2.7B |
-                        | VibeVoice-Large | 32K | ~45 min | Available |
+                        | VibeVoice-Large | 32K | ~45 min | Redacted |
                         
                         ### Technical Specifications
                         - **Frame Rate**: Ultra-low 7.5 Hz for efficiency
@@ -623,7 +635,7 @@ def run_demo(
     """
     if model_paths is None:
         model_paths = {
-            "VibeVoice-Large": "microsoft/VibeVoice-Large",
+            #"VibeVoice-Large": "microsoft/VibeVoice-Large", # it appears Microsoft redacted this model. 09/03/2025
             "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B"
         }
 
