@@ -2,6 +2,7 @@ spaces
 torch
 accelerate
 git+https://github.com/huggingface/transformers.git@refs/pull/40546/head
+diffusers
 tqdm
 numpy
 scipy
