@@ -94,6 +94,22 @@ class VibeVoiceDemo:
             name = os.path.splitext(wav_file)[0]
             self.available_voices[name] = os.path.join(voices_dir, wav_file)
         print(f"Voices loaded: {list(self.available_voices.keys())}")
+        
+        # Organize voices by gender
+        self.male_voices = [
+            "en-Carter_man",
+            "en-Frank_man",
+            "en-Yasser_man",
+            "in-Samuel_man",
+            "zh-Anchen_man_bgm",
+            "zh-Bowen_man"
+        ]
+        self.female_voices = [
+            "en-Alice_woman_bgm",
+            "en-Alice_woman",
+            "en-Maya_woman",
+            "zh-Xinran_woman"
+        ]
 
     def read_audio(self, audio_path: str, target_sr: int = 24000) -> np.ndarray:
         try:
@@ -269,6 +285,18 @@ class VibeVoiceDemo:
             "3p_oil_meeting.txt",
             "4p_gamecreation_meeting.txt",
             "4p_product_meeting.txt"
+        ]
+        
+        # Gender mapping for each script's speakers
+        self.script_speaker_genders = [
+            ["female"],  # AI TED Talk - Dr. Rachel Thompson
+            ["neutral"],  # Political Speech - generic speaker
+            ["male", "female"],  # Finance IPO - James Harrison, Patricia Wells
+            ["female", "male"],  # Telehealth - Dr. Williams, Mr. Johnson
+            ["male", "male", "male"],  # Military - Colonel, Major, Commander
+            ["male", "male", "male"],  # Oil - Frank, Miguel, Sarah (keeping Sarah as is)
+            ["male", "male", "female", "male"],  # Game Creation - Alex, Jordan, Sam, Taylor
+            ["female", "male", "female", "male"]  # Product Meeting - Sarah, Marcus, Jennifer, David
         ]
         
         for txt_file in original_files:
@@ -552,29 +580,73 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     import random
                     scripts_list = demo_instance.example_scripts_natural if use_natural_checkbox else demo_instance.example_scripts
                     if scripts_list:
-                        num_speakers_value, script_value = random.choice(scripts_list)
-                        return num_speakers_value, script_value
-                    return 2, "Speaker 0: Welcome to our AI conference demo!\nSpeaker 1: Thanks, excited to be here!"
+                        idx = random.randint(0, len(scripts_list) - 1)
+                        num_speakers_value, script_value = scripts_list[idx]
+                        
+                        # Get gender preferences for this script
+                        genders = demo_instance.script_speaker_genders[idx] if idx < len(demo_instance.script_speaker_genders) else []
+                        
+                        # Select appropriate voices based on gender
+                        voice_selections = []
+                        for i in range(4):
+                            if i < len(genders):
+                                gender = genders[i]
+                                if gender == "male" and demo_instance.male_voices:
+                                    voice = random.choice(demo_instance.male_voices)
+                                elif gender == "female" and demo_instance.female_voices:
+                                    voice = random.choice(demo_instance.female_voices)
+                                else:
+                                    # neutral or fallback
+                                    all_voices = list(demo_instance.available_voices.keys())
+                                    voice = random.choice(all_voices) if all_voices else None
+                            else:
+                                voice = None
+                            voice_selections.append(voice)
+                        
+                        return [num_speakers_value, script_value] + voice_selections
+                    return [2, "Speaker 0: Welcome to our AI conference demo!\nSpeaker 1: Thanks, excited to be here!"] + [None, None, None, None]
 
                 random_example_btn.click(
                     fn=load_random_example,
                     inputs=[use_natural],
-                    outputs=[num_speakers, script_input],
+                    outputs=[num_speakers, script_input] + speaker_selections,
                     queue=False
                 )
                 
                 def load_specific_example(idx, use_natural_checkbox):
+                    import random
                     scripts_list = demo_instance.example_scripts_natural if use_natural_checkbox else demo_instance.example_scripts
                     if idx < len(scripts_list):
                         num_speakers_value, script_value = scripts_list[idx]
-                        return num_speakers_value, script_value
-                    return 2, ""
+                        # Get gender preferences for this script
+                        genders = demo_instance.script_speaker_genders[idx] if idx < len(demo_instance.script_speaker_genders) else []
+                        
+                        # Select appropriate voices based on gender
+                        voice_selections = []
+                        for i in range(4):
+                            if i < len(genders):
+                                gender = genders[i]
+                                if gender == "male" and demo_instance.male_voices:
+                                    voice = random.choice(demo_instance.male_voices)
+                                elif gender == "female" and demo_instance.female_voices:
+                                    voice = random.choice(demo_instance.female_voices)
+                                else:
+                                    # neutral or fallback
+                                    all_voices = list(demo_instance.available_voices.keys())
+                                    voice = random.choice(all_voices) if all_voices else None
+                            else:
+                                voice = None
+                            voice_selections.append(voice)
+                        
+                        # Return values for all outputs
+                        return [num_speakers_value, script_value] + voice_selections
+                    return [2, ""] + [None, None, None, None]
                 
                 for idx, btn in enumerate(example_buttons):
                     btn.click(
                         fn=lambda nat, i=idx: load_specific_example(i, nat),
                         inputs=[use_natural],
-                        outputs=[num_speakers, script_input],
+                        outputs=[num_speakers, script_input] + speaker_selections,
                         queue=False
                     )
             
@@ -658,7 +730,7 @@ def run_demo(
     model_paths: dict = None,
     device: str = "cuda",
     inference_steps: int = 5,
-    share: bool = True,
+    share: bool = False,
 ):
     """
     model_paths default includes two entries. Replace paths as needed.
