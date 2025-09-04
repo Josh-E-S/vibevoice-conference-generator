@@ -289,13 +289,13 @@ class VibeVoiceDemo:
         
         # Gender mapping for each script's speakers
         self.script_speaker_genders = [
-            ["female"],  # AI TED Talk - Dr. Rachel Thompson
+            ["female"],  # AI TED Talk - Rachel
             ["neutral"],  # Political Speech - generic speaker
-            ["male", "female"],  # Finance IPO - James Harrison, Patricia Wells
-            ["female", "male"],  # Telehealth - Dr. Williams, Mr. Johnson
-            ["male", "male", "male"],  # Military - Colonel, Major, Commander
-            ["male", "male", "male"],  # Oil - Frank, Miguel, Sarah (keeping Sarah as is)
-            ["male", "male", "female", "male"],  # Game Creation - Alex, Jordan, Sam, Taylor
+            ["male", "female"],  # Finance IPO - James, Patricia
+            ["female", "male"],  # Telehealth - Jennifer, Tom
+            ["female", "male", "female"],  # Military - Sarah, David, Lisa
+            ["male", "female", "male"],  # Oil - Robert, Lisa, Michael
+            ["male", "female", "male", "male"],  # Game Creation - Alex, Sarah, Marcus, Emma
             ["female", "male", "female", "male"]  # Product Meeting - Sarah, Marcus, Jennifer, David
         ]
         
