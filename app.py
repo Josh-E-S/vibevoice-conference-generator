@@ -256,19 +256,39 @@ class VibeVoiceDemo:
     def load_example_scripts(self):
         examples_dir = os.path.join(os.path.dirname(__file__), "text_examples")
         self.example_scripts = []
+        self.example_scripts_natural = []
         if not os.path.exists(examples_dir):
             return
 
-        txt_files = sorted(
-            [f for f in os.listdir(examples_dir) if f.lower().endswith('.txt')]
-        )
-        for txt_file in txt_files:
+        original_files = [
+            "1p_ai_tedtalk.txt",
+            "1p_politcal_speech.txt",
+            "2p_financeipo_meeting.txt",
+            "2p_telehealth_meeting.txt",
+            "3p_military_meeting.txt",
+            "3p_oil_meeting.txt",
+            "4p_gamecreation_meeting.txt",
+            "4p_product_meeting.txt"
+        ]
+        
+        for txt_file in original_files:
             try:
                 with open(os.path.join(examples_dir, txt_file), 'r', encoding='utf-8') as f:
                     script_content = f.read().strip()
                 if script_content:
                     num_speakers = self._infer_num_speakers_from_script(script_content)
                     self.example_scripts.append([num_speakers, script_content])
+                    
+                natural_file = txt_file.replace('.txt', '_natural.txt')
+                natural_path = os.path.join(examples_dir, natural_file)
+                if os.path.exists(natural_path):
+                    with open(natural_path, 'r', encoding='utf-8') as f:
+                        natural_content = f.read().strip()
+                    if natural_content:
+                        num_speakers = self._infer_num_speakers_from_script(natural_content)
+                        self.example_scripts_natural.append([num_speakers, natural_content])
+                else:
+                    self.example_scripts_natural.append([num_speakers, script_content])
             except Exception as e:
                 print(f"Error loading {txt_file}: {e}")
 
@@ -412,7 +432,13 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                                 variant="primary", elem_classes="generate-btn", scale=2
                             )
 
-                        gr.Markdown("### Example Scripts")
+                        with gr.Row():
+                            gr.Markdown("### Example Scripts")
+                            use_natural = gr.Checkbox(
+                                value=True,
+                                label="Natural talking sounds",
+                                scale=1
+                            )
                         
                         example_names = [
                             "AI TED Talk",
@@ -535,16 +561,17 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     queue=False
                 )
                 
-                def load_specific_example(idx):
-                    if idx < len(demo_instance.example_scripts):
-                        num_speakers_value, script_value = demo_instance.example_scripts[idx]
+                def load_specific_example(idx, use_natural_checkbox):
+                    scripts_list = demo_instance.example_scripts_natural if use_natural_checkbox else demo_instance.example_scripts
+                    if idx < len(scripts_list):
+                        num_speakers_value, script_value = scripts_list[idx]
                         return num_speakers_value, script_value
                     return 2, ""
                 
                 for idx, btn in enumerate(example_buttons):
                     btn.click(
-                        fn=lambda i=idx: load_specific_example(i),
-                        inputs=[],
+                        fn=lambda i=idx, nat=use_natural: load_specific_example(i, nat),
+                        inputs=[use_natural],
                         outputs=[num_speakers, script_input],
                         queue=False
                     )
