@@ -548,16 +548,17 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     queue=False
                 )
 
-                def load_random_example():
+                def load_random_example(use_natural_checkbox):
                     import random
-                    if demo_instance.example_scripts:
-                        num_speakers_value, script_value = random.choice(demo_instance.example_scripts)
+                    scripts_list = demo_instance.example_scripts_natural if use_natural_checkbox else demo_instance.example_scripts
+                    if scripts_list:
+                        num_speakers_value, script_value = random.choice(scripts_list)
                         return num_speakers_value, script_value
                     return 2, "Speaker 0: Welcome to our AI conference demo!\nSpeaker 1: Thanks, excited to be here!"
 
                 random_example_btn.click(
                     fn=load_random_example,
-                    inputs=[],
+                    inputs=[use_natural],
                     outputs=[num_speakers, script_input],
                     queue=False
                 )
@@ -571,7 +572,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                 
                 for idx, btn in enumerate(example_buttons):
                     btn.click(
-                        fn=lambda i=idx, nat=use_natural: load_specific_example(i, nat),
+                        fn=lambda nat, i=idx: load_specific_example(i, nat),
                         inputs=[use_natural],
                         outputs=[num_speakers, script_input],
                         queue=False
