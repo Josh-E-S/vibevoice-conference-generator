@@ -15,7 +15,7 @@ def setup_vibevoice():
         print("Cloning the VibeVoice repository...")
         try:
             subprocess.run(
-                ["git", "clone", "https://github.com/microsoft/VibeVoice.git"],
+                ["git", "clone", "https://github.com/vibevoice-community/VibeVoice"],
                 check=True,
                 capture_output=True,
                 text=True
