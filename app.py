@@ -433,12 +433,13 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                             )
 
                         with gr.Row():
-                            gr.Markdown("### Example Scripts")
-                            use_natural = gr.Checkbox(
-                                value=True,
-                                label="Natural talking sounds",
-                                scale=1
-                            )
+                            with gr.Column(scale=1):
+                                gr.Markdown("### Example Scripts")
+                                use_natural = gr.Checkbox(
+                                    value=True,
+                                    label="Natural talking sounds",
+                                    scale=1
+                                )
                         
                         example_names = [
                             "AI TED Talk",
