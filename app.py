@@ -9,6 +9,7 @@ import traceback
 import threading
 from spaces import GPU
 from datetime import datetime
+from contextlib import contextmanager
 
 from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
 from processor.vibevoice_processor import VibeVoiceProcessor
@@ -39,6 +40,14 @@ class VibeVoiceDemo:
         self.current_model_name = None
 
         self.available_voices = {}
+        
+        # Set compiler flags for better performance
+        if torch.cuda.is_available() and hasattr(torch, '_inductor'):
+            if hasattr(torch._inductor, 'config'):
+                torch._inductor.config.conv_1x1_as_mm = True
+                torch._inductor.config.coordinate_descent_tuning = True
+                torch._inductor.config.epilogue_fusion = False
+                torch._inductor.config.coordinate_descent_check_all_directions = True
 
         self.load_models()          # load all on CPU
         self.setup_voice_presets()
@@ -61,9 +70,19 @@ class VibeVoiceDemo:
         for name, path in self.model_paths.items():
             print(f" - {name} from {path}")
             proc = VibeVoiceProcessor.from_pretrained(path)
-            mdl = VibeVoiceForConditionalGenerationInference.from_pretrained(
-                path, torch_dtype=torch.bfloat16
-            )
+            # Try to use flash attention if available
+            try:
+                mdl = VibeVoiceForConditionalGenerationInference.from_pretrained(
+                    path, 
+                    torch_dtype=torch.bfloat16,
+                    attn_implementation="flash_attention_2"
+                )
+                print(f"  Flash Attention 2 enabled for {name}")
+            except:
+                # Fallback to default attention
+                mdl = VibeVoiceForConditionalGenerationInference.from_pretrained(
+                    path, torch_dtype=torch.bfloat16
+                )
             # Keep on CPU initially
             self.processors[name] = proc
             self.models[name] = mdl
@@ -208,14 +227,28 @@ class VibeVoiceDemo:
             )
 
             start_time = time.time()
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=None,
-                cfg_scale=cfg_scale,
-                tokenizer=processor.tokenizer,
-                generation_config={'do_sample': False},
-                verbose=False,
-            )
+            
+            # Use efficient attention backend
+            if torch.cuda.is_available() and hasattr(torch.nn.attention, 'SDPBackend'):
+                from torch.nn.attention import SDPBackend, sdpa_kernel
+                with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=None,
+                        cfg_scale=cfg_scale,
+                        tokenizer=processor.tokenizer,
+                        generation_config={'do_sample': False},
+                        verbose=False,
+                    )
+            else:
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=None,
+                    cfg_scale=cfg_scale,
+                    tokenizer=processor.tokenizer,
+                    generation_config={'do_sample': False},
+                    verbose=False,
+                )
             generation_time = time.time() - start_time
 
             if hasattr(outputs, 'speech_outputs') and outputs.speech_outputs[0] is not None:
