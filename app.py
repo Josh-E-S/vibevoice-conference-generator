@@ -443,7 +443,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     with gr.Column(scale=2, elem_classes="generation-card"):
                         gr.Markdown("### Script Input")
                         script_input = gr.Textbox(
-                            label="Conversation Script (Estimated duration will appear here)",
+                            label="Conversation Script",
                             placeholder="Enter your conference script here...",
                             lines=12,
                             max_lines=20,
@@ -463,11 +463,18 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                         with gr.Row():
                             with gr.Column(scale=1):
                                 gr.Markdown("### Example Scripts")
-                                use_natural = gr.Checkbox(
-                                    value=True,
-                                    label="Natural talking sounds",
-                                    scale=1
-                                )
+                                with gr.Row():
+                                    use_natural = gr.Checkbox(
+                                        value=True,
+                                        label="Natural talking sounds",
+                                        scale=1
+                                    )
+                                    duration_display = gr.Textbox(
+                                        value="",
+                                        label="Est. Duration",
+                                        interactive=False,
+                                        scale=1
+                                    )
                         
                         example_names = [
                             "AI TED Talk",
@@ -507,9 +514,9 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     outputs=speaker_selections
                 )
                 
-                def update_script_label(script_text):
+                def update_duration_display(script_text):
                     if not script_text or script_text.strip() == "":
-                        return gr.update(label="Conversation Script (Estimated duration will appear here)")
+                        return ""
                     
                     words = script_text.split()
                     word_count = len(words)
@@ -517,21 +524,21 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     estimated_minutes = word_count / wpm
                     
                     if estimated_minutes < 1:
-                        duration_str = f"{int(estimated_minutes * 60)} seconds"
+                        duration_str = f"{int(estimated_minutes * 60)} sec"
                     else:
                         minutes = int(estimated_minutes)
                         seconds = int((estimated_minutes - minutes) * 60)
                         if seconds > 0:
-                            duration_str = f"{minutes} min {seconds} sec"
+                            duration_str = f"{minutes}m {seconds}s"
                         else:
                             duration_str = f"{minutes} min"
 
-                    return gr.update(label=f"Conversation Script - {word_count} words, ~{duration_str}")
+                    return f"{word_count} words • ~{duration_str}"
 
                 script_input.change(
-                    fn=update_script_label,
+                    fn=update_duration_display,
                     inputs=[script_input],
-                    outputs=[script_input]
+                    outputs=[duration_display]
                 )
 
                 def generate_podcast_wrapper(model_choice, num_speakers, script, *speakers_and_params):
