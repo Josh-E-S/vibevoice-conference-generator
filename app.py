@@ -737,7 +737,7 @@ def run_demo(
     """
     if model_paths is None:
         model_paths = {
-            #"VibeVoice-Large": "microsoft/VibeVoice-Large", # it appears Microsoft redacted this model. 09/03/2025
+            "VibeVoice-7B": "vibevoice/VibeVoice-7B",  # Community mirror of the Large model
             "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B"
         }
 
