@@ -196,7 +196,7 @@ class VibeVoiceDemo:
                 max_new_tokens=None,
                 cfg_scale=cfg_scale,
                 tokenizer=processor.tokenizer,
-                generation_config={'do_sample': False},
+                generation_config={'do_sample': False, 'use_cache': False},
                 verbose=False,
             )
             generation_time = time.time() - start_time
