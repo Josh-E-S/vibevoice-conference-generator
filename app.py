@@ -6,10 +6,13 @@ import librosa
 import soundfile as sf
 import torch
 import traceback
+import threading
 from spaces import GPU
 from datetime import datetime
 
-from transformers import VibeVoiceForConditionalGenerationInference, VibeVoiceProcessor
+from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+from processor.vibevoice_processor import VibeVoiceProcessor
+from modular.streamer import AudioStreamer
 from transformers.utils import logging
 from transformers import set_seed
 
@@ -43,6 +46,17 @@ class VibeVoiceDemo:
 
     def load_models(self):
         print("Loading processors and models on CPU...")
+        
+        # Debug: Show cache location
+        import os
+        cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        print(f"HuggingFace cache directory: {cache_dir}")
+        if os.path.exists(cache_dir):
+            print(f"Cache exists. Size: {sum(os.path.getsize(os.path.join(dirpath, filename)) for dirpath, _, filenames in os.walk(cache_dir) for filename in filenames) / (1024**3):.2f} GB")
+            print("Cached models:")
+            for item in os.listdir(cache_dir):
+                if item.startswith("models--"):
+                    print(f"  - {item}")
         
         for name, path in self.model_paths.items():
             print(f" - {name} from {path}")
@@ -159,7 +173,15 @@ class VibeVoiceDemo:
             log += f"Parameters: CFG Scale={cfg_scale}\n"
             log += f"Speakers: {', '.join(selected_speakers)}\n"
 
-            log += f"Using voice samples from selected speakers\n"
+            voice_samples = []
+            for speaker_name in selected_speakers:
+                audio_path = self.available_voices[speaker_name]
+                audio_data = self.read_audio(audio_path)
+                if len(audio_data) == 0:
+                    raise gr.Error(f"Error: Failed to load audio for {speaker_name}")
+                voice_samples.append(audio_data)
+
+            log += f"Loaded {len(voice_samples)} voice samples\n"
 
             lines = script.strip().split('\n')
             formatted_script_lines = []
@@ -177,18 +199,13 @@ class VibeVoiceDemo:
             log += f"Formatted script with {len(formatted_script_lines)} turns\n"
             log += "Processing with VibeVoice...\n"
 
-            # Processor now expects file paths, not audio arrays
-            voice_sample_paths = [self.available_voices[speaker] for speaker in selected_speakers]
-            
             inputs = processor(
                 text=[formatted_script],
-                voice_samples=[voice_sample_paths],
+                voice_samples=[voice_samples],
                 padding=True,
                 return_tensors="pt",
+                return_attention_mask=True,
             )
-            
-            # Move inputs to device
-            inputs = {key: val.to(self.device) if isinstance(val, torch.Tensor) else val for key, val in inputs.items()}
 
             start_time = time.time()
             outputs = model.generate(
@@ -196,7 +213,7 @@ class VibeVoiceDemo:
                 max_new_tokens=None,
                 cfg_scale=cfg_scale,
                 tokenizer=processor.tokenizer,
-                generation_config={'do_sample': False, 'use_cache': False},
+                generation_config={'do_sample': False},
                 verbose=False,
             )
             generation_time = time.time() - start_time
@@ -210,8 +227,7 @@ class VibeVoiceDemo:
             if audio.ndim > 1:
                 audio = audio.squeeze()
 
-            # Get sample rate from processor
-            sample_rate = processor.audio_processor.sampling_rate if hasattr(processor, 'audio_processor') else 24000
+            sample_rate = 24000
 
             output_dir = "outputs"
             os.makedirs(output_dir, exist_ok=True)
@@ -714,7 +730,7 @@ def run_demo(
     model_paths: dict = None,
     device: str = "cuda",
     inference_steps: int = 5,
-    share: bool = True,
+    share: bool = False,
 ):
     """
     model_paths default includes two entries. Replace paths as needed.
