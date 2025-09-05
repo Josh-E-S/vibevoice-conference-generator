@@ -377,7 +377,6 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
         </div>
         """)
         gr.Markdown("## NOTE: Microsoft has currently removed the VibeVoice Large model from public access. 7B Large is provided via [mirror link](https://huggingface.co/vibevoice) - Credit [mrfakename](https://huggingface.co/mrfakename)")
-        gr.Markdown("# Upload audio, use a sample track, or record yourself then ask questions about the transcript.")
         gr.Markdown('''VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, 
                     such as conferences, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, particularly 
                     in scalability, speaker consistency, and natural turn-taking. A core innovation of VibeVoice is its use of continuous 
