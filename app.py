@@ -658,7 +658,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     "employs a next-token diffusion framework, leveraging a Large Language Model (LLM) to understand textual context and "
                     "dialogue flow, and a diffusion head to generate high-fidelity acoustic details. The model can synthesize speech up to "
                     "90 minutes long with up to 4 distinct speakers, surpassing the typical 1-2 speaker limits of many prior models.''')
-                    
+                with gr.Row():    
                     with gr.Column():
                         gr.Markdown("## VibeVoice: A Frontier Open-Source Text-to-Speech Model")
 
