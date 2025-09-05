@@ -730,7 +730,7 @@ def run_demo(
     model_paths: dict = None,
     device: str = "cuda",
     inference_steps: int = 5,
-    share: bool = False,
+    share: bool = True,
 ):
     """
     model_paths default includes two entries. Replace paths as needed.
