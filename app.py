@@ -25,7 +25,7 @@ class VibeVoiceDemo:
     def __init__(self, model_paths: dict, device: str = "cuda", inference_steps: int = 5):
         """
         model_paths: dict like {"VibeVoice-1.5B": "microsoft/VibeVoice-1.5B",
-                                "VibeVoice-1.1B": "microsoft/VibeVoice-1.1B"}
+                                "VibeVoice-7B": "microsoft/VibeVoice-7B"}
         """
         self.model_paths = model_paths
         self.device = device
@@ -376,7 +376,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                 alt="Canary-Qwen Transcriber Banner">
         </div>
         """)
-        gr.Markdown("## NOTE: Microsoft has currently removed the VibeVoice Large model from public access. 7B Large is provided via [mirror link](https://huggingface.co/vibevoice) - Credit [mrfakename](https://huggingface.co/mrfakename)")
+        gr.Markdown("## NOTE: The Large model takes significant generation time with limited increase in quality. I recommend trying 1.5 first.")
         gr.Markdown('''VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, 
                     such as conferences, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, particularly 
                     in scalability, speaker consistency, and natural turn-taking. A core innovation of VibeVoice is its use of continuous 
@@ -402,7 +402,7 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
                     with gr.Column(scale=1, elem_classes="settings-card"):
                         gr.Markdown("### Conference Settings")
 
-                        # NEW - model dropdown
+                        # Model dropdown
                         model_dropdown = gr.Dropdown(
                             choices=list(demo_instance.models.keys()),
                             value=demo_instance.current_model_name,
@@ -658,6 +658,15 @@ def create_demo_interface(demo_instance: VibeVoiceDemo):
             
             with gr.Tab("Architecture"):
                 with gr.Row():
+                    gr.Markdown('''VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, "
+                    "such as conferences, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, particularly "
+                    "in scalability, speaker consistency, and natural turn-taking. A core innovation of VibeVoice is its use of continuous "
+                    "speech tokenizers (Acoustic and Semantic) operating at an ultra-low frame rate of 7.5 Hz. These tokenizers efficiently "
+                    "preserve audio fidelity while significantly boosting computational efficiency for processing long sequences. VibeVoice "
+                    "employs a next-token diffusion framework, leveraging a Large Language Model (LLM) to understand textual context and "
+                    "dialogue flow, and a diffusion head to generate high-fidelity acoustic details. The model can synthesize speech up to "
+                    "90 minutes long with up to 4 distinct speakers, surpassing the typical 1-2 speaker limits of many prior models.''')
+                    
                     with gr.Column():
                         gr.Markdown("## VibeVoice: A Frontier Open-Source Text-to-Speech Model")
 
@@ -743,8 +752,8 @@ def run_demo(
     """
     if model_paths is None:
         model_paths = {
-            "VibeVoice-7B": "vibevoice/VibeVoice-7B",  # Community mirror of the Large model
-            "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B"
+            "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B",
+            "VibeVoice-7B": "vibevoice/VibeVoice-7B",
         }
 
     set_seed(42)
