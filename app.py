@@ -70,19 +70,14 @@ class VibeVoiceDemo:
         for name, path in self.model_paths.items():
             print(f" - {name} from {path}")
             proc = VibeVoiceProcessor.from_pretrained(path)
-            # Try to use flash attention if available
-            try:
-                mdl = VibeVoiceForConditionalGenerationInference.from_pretrained(
-                    path, 
-                    torch_dtype=torch.bfloat16,
-                    attn_implementation="flash_attention_2"
-                )
-                print(f"  Flash Attention 2 enabled for {name}")
-            except:
-                # Fallback to default attention
-                mdl = VibeVoiceForConditionalGenerationInference.from_pretrained(
-                    path, torch_dtype=torch.bfloat16
-                )
+            # Use SDPA (Scaled Dot Product Attention) for better memory efficiency
+            # Flash Attention 2 disabled to reduce memory usage on L4 GPUs
+            mdl = VibeVoiceForConditionalGenerationInference.from_pretrained(
+                path, 
+                torch_dtype=torch.bfloat16,
+                attn_implementation="sdpa"  # More memory efficient than flash_attention_2
+            )
+            print(f"  SDPA (memory-efficient) attention enabled for {name}")
             # Keep on CPU initially
             self.processors[name] = proc
             self.models[name] = mdl
@@ -94,11 +89,20 @@ class VibeVoiceDemo:
         """
         Move the selected model to CUDA and push all others back to CPU.
         """
+        # Clear GPU cache before moving models
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         for name, mdl in self.models.items():
             if name == target_name:
                 self.models[name] = mdl.to(self.device)
             else:
                 self.models[name] = mdl.to("cpu")
+        
+        # Clear cache again after model placement
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         self.current_model_name = target_name
         print(f"Model {target_name} is now on {self.device}. Others moved to CPU.")
 
@@ -168,6 +172,10 @@ class VibeVoiceDemo:
             processor = self.processors[model_name]
 
             print(f"Using model {model_name} on {self.device}")
+            
+            # Additional cache clear before generation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             model.eval()
             model.set_ddpm_inference_steps(num_steps=self.inference_steps)
