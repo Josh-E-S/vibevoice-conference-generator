@@ -225,6 +225,18 @@ def create_demo_interface():
                 def update_speaker_visibility(num_speakers):
                     return [gr.update(visible=(i < num_speakers)) for i in range(4)]
                 
+                def estimate_duration(script):
+                    """Estimate duration based on word count."""
+                    if not script:
+                        return ""
+                    words = len(script.split())
+                    # Approximate 150 words per minute for natural speech
+                    minutes = words / 150
+                    if minutes < 1:
+                        return f"~{int(minutes * 60)} seconds"
+                    else:
+                        return f"~{minutes:.1f} minutes"
+                
                 def smart_speaker_selection(gender_list):
                     """Select speakers based on gender requirements."""
                     selected = []
@@ -253,26 +265,35 @@ def create_demo_interface():
                 def load_specific_example(idx, natural):
                     """Load a specific example script."""
                     if idx >= len(EXAMPLE_SCRIPTS):
-                        return [2, ""] + [None, None, None, None]
+                        return [2, "", ""] + [None, None, None, None]
                     
                     script = EXAMPLE_SCRIPTS_NATURAL[idx] if natural else EXAMPLE_SCRIPTS[idx]
                     genders = SCRIPT_SPEAKER_GENDERS[idx] if idx < len(SCRIPT_SPEAKER_GENDERS) else ["neutral"]
                     speakers = smart_speaker_selection(genders)
+                    duration = estimate_duration(script)
                     
                     # Pad speakers to 4
                     while len(speakers) < 4:
                         speakers.append(None)
                     
-                    return [len(genders), script] + speakers[:4]
+                    return [len(genders), script, duration] + speakers[:4]
                 
                 # Connect example buttons
                 for idx, btn in enumerate(example_buttons):
                     btn.click(
                         fn=lambda nat, i=idx: load_specific_example(i, nat),
                         inputs=[use_natural],
-                        outputs=[num_speakers, script_input] + speaker_selections,
+                        outputs=[num_speakers, script_input, duration_display] + speaker_selections,
                         queue=False
                     )
+                
+                # Update duration when script changes
+                script_input.change(
+                    fn=estimate_duration,
+                    inputs=[script_input],
+                    outputs=[duration_display],
+                    queue=False
+                )
 
                 num_speakers.change(
                     fn=update_speaker_visibility,
