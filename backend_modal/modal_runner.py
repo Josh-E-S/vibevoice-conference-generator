@@ -29,7 +29,7 @@ image = (
     .add_local_dir("backend_modal/modular", remote_path="/root/modular")
     .add_local_dir("backend_modal/processor", remote_path="/root/processor")
     .add_local_dir("backend_modal/voices", remote_path="/root/voices")
-    .add_local_dir("./text_examples", remote_path="/root/text_examples")
+    .add_local_dir("text_examples", remote_path="/root/text_examples")
     .add_local_dir("backend_modal/schedule", remote_path="/root/schedule")
 )
 
@@ -116,6 +116,59 @@ class VibeVoiceModel:
         except Exception as e:
             print(f"Error reading audio {audio_path}: {e}")
             return np.array([])
+
+    @staticmethod
+    def _infer_num_speakers_from_script(script: str) -> int:
+        """
+        Infer number of speakers by counting distinct 'Speaker X:' tags in the script.
+        Robust to 0- or 1-indexed labels and repeated turns.
+        Falls back to 1 if none found.
+        """
+        import re
+        ids = re.findall(r'(?mi)^\s*Speaker\s+(\d+)\s*:', script)
+        return len({int(x) for x in ids}) if ids else 1
+
+    @modal.method()
+    def get_example_scripts(self):
+        examples_dir = "/root/text_examples"
+        example_scripts = []
+        example_scripts_natural = []
+        if not os.path.exists(examples_dir):
+            return [], []
+
+        original_files = [
+            "1p_ai_tedtalk.txt",
+            "1p_politcal_speech.txt",
+            "2p_financeipo_meeting.txt",
+            "2p_telehealth_meeting.txt",
+            "3p_military_meeting.txt",
+            "3p_oil_meeting.txt",
+            "4p_gamecreation_meeting.txt",
+            "4p_product_meeting.txt"
+        ]
+        
+        for txt_file in original_files:
+            try:
+                with open(os.path.join(examples_dir, txt_file), 'r', encoding='utf-8') as f:
+                    script_content = f.read().strip()
+                if script_content:
+                    num_speakers = self._infer_num_speakers_from_script(script_content)
+                    example_scripts.append([num_speakers, script_content])
+                    
+                natural_file = txt_file.replace('.txt', '_natural.txt')
+                natural_path = os.path.join(examples_dir, natural_file)
+                if os.path.exists(natural_path):
+                    with open(natural_path, 'r', encoding='utf-8') as f:
+                        natural_content = f.read().strip()
+                    if natural_content:
+                        num_speakers = self._infer_num_speakers_from_script(natural_content)
+                        example_scripts_natural.append([num_speakers, natural_content])
+                else:
+                    example_scripts_natural.append([num_speakers, script_content])
+            except Exception as e:
+                print(f"Error loading {txt_file}: {e}")
+        
+        return example_scripts, example_scripts_natural
 
     @modal.method()
     def generate_podcast(self,
