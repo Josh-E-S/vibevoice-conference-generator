@@ -6,8 +6,8 @@ import traceback
 # --- Configuration ---
 # This is the name of your Modal stub.
 MODAL_STUB_NAME = "vibevoice-generator"
-# This is the name of the remote class and method to call.
-MODAL_FUNCTION_NAME = "VibeVoiceModel.generate_podcast"
+MODAL_CLASS_NAME = "VibeVoiceModel" # Extract class name
+MODAL_METHOD_NAME = "generate_podcast" # Extract method name
 
 # These lists are now hardcoded because the data lives on the Modal container.
 # For a more dynamic app, you could create a small Modal function to fetch these lists.
@@ -21,9 +21,12 @@ DEFAULT_SPEAKERS = ['en-Alice_woman', 'en-Carter_man', 'en-Frank_man', 'en-Maya_
 
 # --- Modal Connection ---
 try:
-    # This looks up the remote function on Modal
-    # It will raise an error if the app isn't deployed (`modal deploy modal_runner.py`)
-    remote_generate_function = modal.Function.lookup(MODAL_STUB_NAME, MODAL_FUNCTION_NAME)
+    # Look up the remote class
+    RemoteVibeVoiceModel = modal.Cls.from_name(MODAL_STUB_NAME, MODAL_CLASS_NAME)
+    # Create an instance of the remote class
+    remote_model_instance = RemoteVibeVoiceModel()
+    # Get the remote method
+    remote_generate_function = remote_model_instance.generate_podcast
     print("Successfully connected to Modal function.")
 except modal.exception.NotFoundError:
     print("ERROR: Modal function not found.")
