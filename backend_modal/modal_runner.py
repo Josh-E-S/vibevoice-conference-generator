@@ -39,7 +39,7 @@ app = modal.App(
 )
 
 
-@app.cls(gpu="T4", scaledown_window=300)
+@app.cls(gpu="A100-40GB", scaledown_window=300)
 class VibeVoiceModel:
     def __init__(self):
         self.model_paths = {
@@ -53,13 +53,13 @@ class VibeVoiceModel:
     def load_models(self):
         """
         This method is run once when the container starts.
-        It downloads and loads all models onto the GPU.
+        With A10G (24GB), we can load both models to GPU.
         """
         # Project-specific imports are moved here to run inside the container
         from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
         from processor.vibevoice_processor import VibeVoiceProcessor
 
-        print("Entering container and loading models to GPU...")
+        print("Entering container and loading models to GPU (A10G with 24GB)...")
         
         # Set compiler flags for better performance
         if torch.cuda.is_available() and hasattr(torch, '_inductor'):
@@ -71,7 +71,9 @@ class VibeVoiceModel:
 
         self.models = {}
         self.processors = {}
+        self.current_model_name = None
         
+        # Load all models directly to GPU (A10G has enough memory)
         for name, path in self.model_paths.items():
             print(f" - Loading {name} from {path}")
             proc = VibeVoiceProcessor.from_pretrained(path)
@@ -79,14 +81,24 @@ class VibeVoiceModel:
                 path, 
                 torch_dtype=torch.bfloat16,
                 attn_implementation="sdpa"
-            ).to(self.device)
+            ).to(self.device)  # Load directly to GPU
             mdl.eval()
             print(f"  {name} loaded to {self.device}")
             self.processors[name] = proc
             self.models[name] = mdl
         
+        # Set default model
+        self.current_model_name = "VibeVoice-1.5B"
+        
         self.setup_voice_presets()
         print("Model loading complete.")
+    
+    def _place_model(self, target_name: str):
+        """
+        With A10G, both models stay on GPU. Just update the current model.
+        """
+        self.current_model_name = target_name
+        print(f"Switched to model {target_name}")
 
     def setup_voice_presets(self):
         self.available_voices = {}
@@ -178,11 +190,18 @@ class VibeVoiceModel:
                          speaker_4: str = None):
         """
         This is the main inference function that will be called from the Gradio app.
+        Yields progress updates during generation.
         """
         try:
+            # Yield initial status
+            yield None, "🔄 Initializing generation..."
             if model_name not in self.models:
                 raise ValueError(f"Unknown model: {model_name}")
 
+            # Move the selected model to GPU, others to CPU
+            yield None, "🔄 Loading model to GPU..."
+            self._place_model(model_name)
+            
             model = self.models[model_name]
             processor = self.processors[model_name]
             model.set_ddpm_inference_steps(num_steps=self.inference_steps)
@@ -192,7 +211,7 @@ class VibeVoiceModel:
             if not script.strip():
                 raise ValueError("Error: Please provide a script.")
 
-            script = script.replace("’", "'")
+            script = script.replace("'", "'")
 
             if not 1 <= num_speakers <= 4:
                 raise ValueError("Error: Number of speakers must be between 1 and 4.")
@@ -206,16 +225,19 @@ class VibeVoiceModel:
             log += f"Model: {model_name}\n"
             log += f"Parameters: CFG Scale={cfg_scale}\n"
             log += f"Speakers: {', '.join(selected_speakers)}\n"
+            
+            yield None, log + "\n🔄 Loading voice samples..."
 
             voice_samples = []
-            for speaker_name in selected_speakers:
+            for i, speaker_name in enumerate(selected_speakers):
                 audio_path = self.available_voices[speaker_name]
                 audio_data = self.read_audio(audio_path)
                 if len(audio_data) == 0:
                     raise ValueError(f"Error: Failed to load audio for {speaker_name}")
                 voice_samples.append(audio_data)
+                yield None, log + f"\n✓ Loaded voice {i+1}/{len(selected_speakers)}: {speaker_name}"
 
-            log += f"Loaded {len(voice_samples)} voice samples\n"
+            log += f"\nLoaded {len(voice_samples)} voice samples"
 
             lines = script.strip().split('\n')
             formatted_script_lines = []
@@ -229,8 +251,8 @@ class VibeVoiceModel:
                     formatted_script_lines.append(f"Speaker {speaker_id}: {line}")
 
             formatted_script = '\n'.join(formatted_script_lines)
-            log += f"Formatted script with {len(formatted_script_lines)} turns\n"
-            log += "Processing with VibeVoice...\n"
+            log += f"\nFormatted script with {len(formatted_script_lines)} turns"
+            yield None, log + "\n🔄 Processing script with VibeVoice..."
 
             inputs = processor(
                 text=[formatted_script],
@@ -240,6 +262,7 @@ class VibeVoiceModel:
                 return_attention_mask=True,
             ).to(self.device)
 
+            yield None, log + "\n🎯 Starting audio generation (this may take 1-2 minutes)..."
             start_time = time.time()
             
             with torch.inference_mode():
@@ -253,6 +276,8 @@ class VibeVoiceModel:
                 )
             generation_time = time.time() - start_time
 
+            yield None, log + f"\n✓ Generation completed in {generation_time:.2f} seconds\n🔄 Processing audio..."
+
             if hasattr(outputs, 'speech_outputs') and outputs.speech_outputs[0] is not None:
                 audio_tensor = outputs.speech_outputs[0]
                 audio = audio_tensor.cpu().float().numpy()
@@ -264,16 +289,15 @@ class VibeVoiceModel:
 
             sample_rate = 24000
             total_duration = len(audio) / sample_rate
-            log += f"Generation completed in {generation_time:.2f} seconds\n"
-            log += f"Final audio duration: {total_duration:.2f} seconds\n"
+            log += f"\n✓ Generation completed in {generation_time:.2f} seconds"
+            log += f"\n✓ Audio duration: {total_duration:.2f} seconds"
 
-            # Return the raw audio data and sample rate, Gradio will handle the rest
-            return (sample_rate, audio), log
+            # Final yield with both audio and complete log
+            yield (sample_rate, audio), log + "\n✅ Complete!"
 
         except Exception as e:
             import traceback
-            error_msg = f"An unexpected error occurred on Modal: {str(e)}\n{traceback.format_exc()}"
+            error_msg = f"❌ An unexpected error occurred on Modal: {str(e)}\n{traceback.format_exc()}"
             print(error_msg)
-            # Return a special value or raise an exception that the client can handle
-            # For Gradio, returning a log message is often best.
-            return None, error_msg
+            # Yield error state
+            yield None, error_msg

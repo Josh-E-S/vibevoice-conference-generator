@@ -312,8 +312,8 @@ def create_demo_interface():
                         speakers = speakers_and_params[:4]
                         cfg_scale_val = speakers_and_params[4]
                         
-                        # This is the call to the remote Modal function
-                        result, log = remote_generate_function.remote(
+                        # Stream updates from the Modal function
+                        for update in remote_generate_function.remote_gen(
                             num_speakers=int(num_speakers_val),
                             script=script,
                             speaker_1=speakers[0],
@@ -322,12 +322,15 @@ def create_demo_interface():
                             speaker_4=speakers[3],
                             cfg_scale=cfg_scale_val,
                             model_name=model_choice
-                        )
-                        yield result, log
+                        ):
+                            # Each update is a tuple (audio_or_none, log_message)
+                            if update:
+                                audio, log = update
+                                yield audio, log
                     except Exception as e:
                         tb = traceback.format_exc()
                         print(f"Error calling Modal: {e}")
-                        yield None, f"An error occurred in the Gradio wrapper: {e}\n\n{tb}"
+                        yield None, f"❌ An error occurred: {e}\n\n{tb}"
 
                 generate_btn.click(
                     fn=generate_podcast_wrapper,
