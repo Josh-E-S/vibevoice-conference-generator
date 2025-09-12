@@ -17,7 +17,6 @@ image = (
         "accelerate==1.6.0",
         "transformers==4.51.3",
         "diffusers",
-        "huggingface_hub",
         "tqdm",
         "numpy",
         "scipy",
@@ -40,7 +39,7 @@ app = modal.App(
 )
 
 
-@app.cls(gpu="T4", scaledown_window=300, secrets=[modal.Secret.from_name("hf-secret")])
+@app.cls(gpu="T4", scaledown_window=300)
 class VibeVoiceModel:
     def __init__(self):
         self.model_paths = {
@@ -56,18 +55,6 @@ class VibeVoiceModel:
         This method is run once when the container starts.
         It downloads and loads all models onto the GPU.
         """
-        # Set up HuggingFace authentication
-        import os
-        from huggingface_hub import login
-        
-        # Get the HF token from Modal secrets
-        hf_token = os.environ.get("HF_TOKEN")
-        if hf_token:
-            login(token=hf_token)
-            print("Logged in to HuggingFace Hub")
-        else:
-            print("Warning: No HF_TOKEN found in secrets")
-        
         # Project-specific imports are moved here to run inside the container
         from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
         from processor.vibevoice_processor import VibeVoiceProcessor
