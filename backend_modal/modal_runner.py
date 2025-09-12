@@ -17,6 +17,7 @@ image = (
         "accelerate==1.6.0",
         "transformers==4.51.3",
         "diffusers",
+        "huggingface_hub",
         "tqdm",
         "numpy",
         "scipy",
@@ -41,15 +42,11 @@ app = modal.App(
 
 @app.cls(gpu="T4", scaledown_window=300, secrets=[modal.Secret.from_name("hf-secret")])
 class VibeVoiceModel:
-    def __init__(self, model_paths: dict = None):
-        if model_paths is None:
-            self.model_paths = {
-                "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B",
-                "VibeVoice-7B": "vibevoice/VibeVoice-7B",
-            }
-        else:
-            self.model_paths = model_paths
-        
+    def __init__(self):
+        self.model_paths = {
+            "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B",
+            "VibeVoice-7B": "vibevoice/VibeVoice-7B",
+        }
         self.device = "cuda"
         self.inference_steps = 5
 
@@ -59,6 +56,18 @@ class VibeVoiceModel:
         This method is run once when the container starts.
         It downloads and loads all models onto the GPU.
         """
+        # Set up HuggingFace authentication
+        import os
+        from huggingface_hub import login
+        
+        # Get the HF token from Modal secrets
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            login(token=hf_token)
+            print("Logged in to HuggingFace Hub")
+        else:
+            print("Warning: No HF_TOKEN found in secrets")
+        
         # Project-specific imports are moved here to run inside the container
         from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
         from processor.vibevoice_processor import VibeVoiceProcessor
