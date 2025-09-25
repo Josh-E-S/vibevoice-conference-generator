@@ -332,6 +332,8 @@ def create_demo_interface():
                         speakers = speakers_and_params[:4]
                         cfg_scale_val = speakers_and_params[4]
                         current_log = ""
+                        last_pct = 0
+                        last_status = "**Connecting**\nRequesting GPU resources…"
 
                         # Stream updates from the Modal function
                         for update in remote_generate_function.remote_gen(
@@ -347,21 +349,37 @@ def create_demo_interface():
                             if not update:
                                 continue
 
-                            audio_payload = update.get("audio")
-                            progress_pct = update.get("pct", 0)
-                            stage_label = update.get("stage", "").replace("_", " ").title() or "Status"
-                            status_line = update.get("status") or "Processing…"
-                            current_log = update.get("log", current_log)
+                            if isinstance(update, dict):
+                                audio_payload = update.get("audio")
+                                progress_pct = update.get("pct", last_pct)
+                                stage_label = update.get("stage", "").replace("_", " ").title() or "Status"
+                                status_line = update.get("status") or "Processing…"
+                                current_log = update.get("log", current_log)
 
-                            status_formatted = f"**{stage_label}**\n{status_line}"
-                            audio_output = audio_payload if audio_payload is not None else gr.update()
+                                status_formatted = f"**{stage_label}**\n{status_line}"
+                                audio_output = audio_payload if audio_payload is not None else gr.update()
 
-                            yield (
-                                audio_output,
-                                current_log,
-                                status_formatted,
-                                gr.update(value=progress_pct),
-                            )
+                                last_pct = progress_pct
+                                last_status = status_formatted
+
+                                yield (
+                                    audio_output,
+                                    current_log,
+                                    status_formatted,
+                                    gr.update(value=progress_pct),
+                                )
+                            else:
+                                # Backwards compatibility: older backend returns (audio, log)
+                                audio_payload, log_text = update if isinstance(update, (tuple, list)) else (None, str(update))
+                                if log_text:
+                                    current_log = log_text
+                                audio_output = audio_payload if audio_payload is not None else gr.update()
+                                yield (
+                                    audio_output,
+                                    current_log,
+                                    last_status,
+                                    gr.update(value=last_pct),
+                                )
                     except Exception as e:
                         tb = traceback.format_exc()
                         print(f"Error calling Modal: {e}")
