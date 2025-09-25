@@ -221,6 +221,19 @@ def create_demo_interface():
                             lines=8, max_lines=15,
                             interactive=False,
                         )
+                        with gr.Row():
+                            status_display = gr.Markdown(
+                                value="Status: idle.",
+                                elem_id="status-display",
+                            )
+                            progress_slider = gr.Slider(
+                                minimum=0,
+                                maximum=100,
+                                value=0,
+                                step=1,
+                                label="Progress",
+                                interactive=False,
+                            )
 
                 def update_speaker_visibility(num_speakers):
                     return [gr.update(visible=(i < num_speakers)) for i in range(4)]
@@ -303,15 +316,23 @@ def create_demo_interface():
 
                 def generate_podcast_wrapper(model_choice, num_speakers_val, script, *speakers_and_params):
                     if remote_generate_function is None:
-                        return None, "ERROR: Modal function not deployed. Please contact the space owner."
-                    
+                        error_message = "ERROR: Modal function not deployed. Please contact the space owner."
+                        yield None, error_message, "Status: error.", gr.update(value=0)
+                        return
+
                     # Show a message that we are calling the remote function
-                    yield None, "🔄 Calling remote GPU on Modal.com... this may take a moment to start."
+                    yield (
+                        None,
+                        "🔄 Calling remote GPU on Modal.com... this may take a moment to start.",
+                        "**Connecting**\nRequesting GPU resources…",
+                        gr.update(value=0),
+                    )
 
                     try:
                         speakers = speakers_and_params[:4]
                         cfg_scale_val = speakers_and_params[4]
-                        
+                        current_log = ""
+
                         # Stream updates from the Modal function
                         for update in remote_generate_function.remote_gen(
                             num_speakers=int(num_speakers_val),
@@ -323,19 +344,39 @@ def create_demo_interface():
                             cfg_scale=cfg_scale_val,
                             model_name=model_choice
                         ):
-                            # Each update is a tuple (audio_or_none, log_message)
-                            if update:
-                                audio, log = update
-                                yield audio, log
+                            if not update:
+                                continue
+
+                            audio_payload = update.get("audio")
+                            progress_pct = update.get("pct", 0)
+                            stage_label = update.get("stage", "").replace("_", " ").title() or "Status"
+                            status_line = update.get("status") or "Processing…"
+                            current_log = update.get("log", current_log)
+
+                            status_formatted = f"**{stage_label}**\n{status_line}"
+                            audio_output = audio_payload if audio_payload is not None else gr.update()
+
+                            yield (
+                                audio_output,
+                                current_log,
+                                status_formatted,
+                                gr.update(value=progress_pct),
+                            )
                     except Exception as e:
                         tb = traceback.format_exc()
                         print(f"Error calling Modal: {e}")
-                        yield None, f"❌ An error occurred: {e}\n\n{tb}"
+                        error_log = f"❌ An error occurred: {e}\n\n{tb}"
+                        yield (
+                            None,
+                            error_log,
+                            "**Error**\nInference failed.",
+                            gr.update(value=0),
+                        )
 
                 generate_btn.click(
                     fn=generate_podcast_wrapper,
                     inputs=[model_dropdown, num_speakers, script_input] + speaker_selections + [cfg_scale],
-                    outputs=[complete_audio_output, log_output]
+                    outputs=[complete_audio_output, log_output, status_display, progress_slider]
                 )
             
             with gr.Tab("Architecture"):
