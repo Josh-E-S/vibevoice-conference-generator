@@ -110,6 +110,42 @@ theme = gr.themes.Ocean(
 ).set(
     button_large_radius='*radius_sm'
 )
+ 
+AUDIO_LABEL_DEFAULT = "Complete Conference (Download)"
+PRIMARY_STAGE_MESSAGES = {
+    "connecting": ("🚀 Request Submitted", "Provisioning GPU resources... cold starts can take up to a minute."),
+    "queued": ("🚦 Waiting For GPU", "Worker is spinning up. Cold starts may take 30-60 seconds."),
+    "loading_model": ("📦 Loading Model", "Streaming VibeVoice weights to the GPU."),
+    "loading_voices": ("🎙️ Loading Voices", None),
+    "preparing_inputs": ("📝 Preparing Script", "Formatting the conversation for the model."),
+    "generating_audio": ("🎧 Generating Audio", "Synthesizing speech — this is the longest step."),
+    "processing_audio": ("✨ Finalizing Audio", "Converting tensors into a playable waveform."),
+    "complete": ("✅ Ready", "Press play below or download your conference."),
+    "error": ("❌ Error", "Check the log for details."),
+}
+AUDIO_STAGE_LABELS = {
+    "connecting": "Complete Conference (requesting GPU...)",
+    "queued": "Complete Conference (GPU warming up...)",
+    "loading_model": "Complete Conference (loading model...)",
+    "loading_voices": "Complete Conference (loading voices...)",
+    "preparing_inputs": "Complete Conference (preparing inputs...)",
+    "generating_audio": "Complete Conference (generating audio...)",
+    "processing_audio": "Complete Conference (finalizing audio...)",
+    "error": "Complete Conference (error)",
+}
+READY_PRIMARY_STATUS = "### Ready\nPress **Generate** to run VibeVoice."
+
+
+def build_primary_status(stage: str, status_line: str) -> str:
+    title, default_desc = PRIMARY_STAGE_MESSAGES.get(stage, ("⚙️ Working", "Processing..."))
+    desc_parts = []
+    if default_desc:
+        desc_parts.append(default_desc)
+    if status_line and status_line not in desc_parts:
+        desc_parts.append(status_line)
+    desc = "\n\n".join(desc_parts) if desc_parts else status_line
+    return f"### {title}\n{desc}"
+
 
 def create_demo_interface():
     with gr.Blocks(
@@ -128,8 +164,12 @@ def create_demo_interface():
         with gr.Tabs():
             with gr.Tab("Generate"):
                 gr.Markdown("### Generated Conference")
+                primary_status = gr.Markdown(
+                    value=READY_PRIMARY_STATUS,
+                    elem_id="primary-status",
+                )
                 complete_audio_output = gr.Audio(
-                    label="Complete Conference (Download)",
+                    label=AUDIO_LABEL_DEFAULT,
                     type="numpy",
                     autoplay=False,
                     show_download_button=True,
@@ -223,7 +263,7 @@ def create_demo_interface():
                         )
                         with gr.Row():
                             status_display = gr.Markdown(
-                                value="Status: idle.",
+                                value="**Idle**\nPress generate to get started.",
                                 elem_id="status-display",
                             )
                             progress_slider = gr.Slider(
@@ -317,23 +357,37 @@ def create_demo_interface():
                 def generate_podcast_wrapper(model_choice, num_speakers_val, script, *speakers_and_params):
                     if remote_generate_function is None:
                         error_message = "ERROR: Modal function not deployed. Please contact the space owner."
-                        yield None, error_message, "Status: error.", gr.update(value=0)
+                        primary_error = build_primary_status("error", "Modal backend is offline.")
+                        yield (
+                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
+                            error_message,
+                            "**Error**\nModal backend unavailable.",
+                            gr.update(value=0),
+                            primary_error,
+                        )
                         return
 
-                    # Show a message that we are calling the remote function
+                    connecting_status_line = "Provisioning GPU resources... cold starts can take up to a minute."
+                    primary_connecting = build_primary_status("connecting", connecting_status_line)
+                    status_detail = "**Connecting**\nRequesting GPU resources…"
+
                     yield (
-                        None,
+                        gr.update(label=AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)),
                         "🔄 Calling remote GPU on Modal.com... this may take a moment to start.",
-                        "**Connecting**\nRequesting GPU resources…",
-                        gr.update(value=0),
+                        status_detail,
+                        gr.update(value=1),
+                        primary_connecting,
                     )
 
                     try:
                         speakers = speakers_and_params[:4]
                         cfg_scale_val = speakers_and_params[4]
                         current_log = ""
-                        last_pct = 0
-                        last_status = "**Connecting**\nRequesting GPU resources…"
+                        last_pct = 1
+                        last_status = status_detail
+                        last_primary = primary_connecting
+                        last_audio_label = AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)
+                        last_stage = "connecting"
 
                         # Stream updates from the Modal function
                         for update in remote_generate_function.remote_gen(
@@ -352,49 +406,95 @@ def create_demo_interface():
                             if isinstance(update, dict):
                                 audio_payload = update.get("audio")
                                 progress_pct = update.get("pct", last_pct)
-                                stage_label = update.get("stage", "").replace("_", " ").title() or "Status"
-                                status_line = update.get("status") or "Processing…"
+                                stage_key = update.get("stage", last_stage) or last_stage
+                                status_line = update.get("status") or "Processing..."
                                 current_log = update.get("log", current_log)
 
+                                stage_label = stage_key.replace("_", " ").title() if stage_key else "Status"
                                 status_formatted = f"**{stage_label}**\n{status_line}"
-                                audio_output = audio_payload if audio_payload is not None else gr.update()
+                                progress_value = max(0, min(100, int(round(progress_pct))))
 
-                                last_pct = progress_pct
-                                last_status = status_formatted
+                                audio_label = AUDIO_STAGE_LABELS.get(stage_key)
+                                if not audio_label:
+                                    audio_label = f"Complete Conference ({stage_label.lower()})" if stage_label else AUDIO_LABEL_DEFAULT
+                                if stage_key == "complete":
+                                    audio_label = AUDIO_LABEL_DEFAULT
+                                if stage_key == "error":
+                                    progress_value = 0
+
+                                primary_value = build_primary_status(stage_key, status_line)
+
+                                audio_update = gr.update(label=audio_label)
+                                if audio_payload is not None:
+                                    audio_update = gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT)
 
                                 yield (
-                                    audio_output,
+                                    audio_update,
                                     current_log,
                                     status_formatted,
-                                    gr.update(value=progress_pct),
+                                    gr.update(value=progress_value),
+                                    primary_value,
                                 )
+
+                                last_pct = progress_value
+                                last_status = status_formatted
+                                last_primary = primary_value
+                                last_audio_label = audio_label
+                                last_stage = stage_key
                             else:
                                 # Backwards compatibility: older backend returns (audio, log)
                                 audio_payload, log_text = update if isinstance(update, (tuple, list)) else (None, str(update))
+                                status_line = None
                                 if log_text:
                                     current_log = log_text
-                                audio_output = audio_payload if audio_payload is not None else gr.update()
+                                    status_line = log_text.splitlines()[-1]
+                                if not status_line:
+                                    status_line = "Processing..."
+
+                                if audio_payload is not None:
+                                    progress_value = 100
+                                    audio_label = AUDIO_LABEL_DEFAULT
+                                    primary_value = build_primary_status("complete", "Conference ready to download.")
+                                    status_formatted = "**Complete**\nConference ready to download."
+                                else:
+                                    progress_value = max(last_pct, 70)
+                                    audio_label = AUDIO_STAGE_LABELS.get("generating_audio", last_audio_label)
+                                    primary_value = build_primary_status("generating_audio", status_line)
+                                    status_formatted = f"**Streaming**\n{status_line}"
+
+                                audio_update = gr.update(label=audio_label)
+                                if audio_payload is not None:
+                                    audio_update = gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT)
+
+                                last_pct = progress_value
+                                last_status = status_formatted
+                                last_primary = primary_value
+                                last_audio_label = audio_label
+
                                 yield (
-                                    audio_output,
+                                    audio_update,
                                     current_log,
-                                    last_status,
-                                    gr.update(value=last_pct),
+                                    status_formatted,
+                                    gr.update(value=progress_value),
+                                    primary_value,
                                 )
                     except Exception as e:
                         tb = traceback.format_exc()
                         print(f"Error calling Modal: {e}")
                         error_log = f"❌ An error occurred: {e}\n\n{tb}"
+                        primary_error = build_primary_status("error", "Inference failed.")
                         yield (
-                            None,
+                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
                             error_log,
                             "**Error**\nInference failed.",
                             gr.update(value=0),
+                            primary_error,
                         )
 
                 generate_btn.click(
                     fn=generate_podcast_wrapper,
                     inputs=[model_dropdown, num_speakers, script_input] + speaker_selections + [cfg_scale],
-                    outputs=[complete_audio_output, log_output, status_display, progress_slider]
+                    outputs=[complete_audio_output, log_output, status_display, progress_slider, primary_status]
                 )
             
             with gr.Tab("Architecture"):

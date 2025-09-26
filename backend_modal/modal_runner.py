@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import numpy as np
 import librosa
 import soundfile as sf
@@ -407,17 +408,49 @@ class VibeVoiceModel:
                 status="Running VibeVoice diffusion (this may take 1-2 minutes)…",
                 log_text=log_text,
             )
+
             start_time = time.time()
-            
-            with torch.inference_mode():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=None,
-                    cfg_scale=cfg_scale,
-                    tokenizer=processor.tokenizer,
-                    generation_config={'do_sample': False},
-                    verbose=False,
+            result_container = {}
+            exception_container = {}
+
+            def _run_generation():
+                try:
+                    with torch.inference_mode():
+                        result_container['outputs'] = model.generate(
+                            **inputs,
+                            max_new_tokens=None,
+                            cfg_scale=cfg_scale,
+                            tokenizer=processor.tokenizer,
+                            generation_config={'do_sample': False},
+                            verbose=False,
+                        )
+                except Exception as gen_err:
+                    exception_container['error'] = gen_err
+
+            generation_thread = threading.Thread(target=_run_generation, daemon=True)
+            generation_thread.start()
+
+            # Emit keep-alive progress while the heavy generation is running
+            while generation_thread.is_alive():
+                elapsed = time.time() - start_time
+                status_msg = f"Running VibeVoice diffusion… {int(elapsed)}s elapsed"
+                pct_hint = min(88, 70 + int(elapsed // 5))
+                yield self._emit_progress(
+                    stage="generating_audio",
+                    pct=pct_hint,
+                    status=status_msg,
+                    log_text=log_text,
                 )
+                time.sleep(5)
+
+            generation_thread.join()
+            if 'error' in exception_container:
+                raise exception_container['error']
+
+            outputs = result_container.get('outputs')
+            if outputs is None:
+                raise RuntimeError("Generation thread finished without producing outputs.")
+
             generation_time = time.time() - start_time
 
             log_lines.append(f"Generation completed in {generation_time:.2f} seconds")
