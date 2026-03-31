@@ -134,18 +134,16 @@ STYLE:
 - Include personality — people joke, digress slightly, use analogies, get passionate about topics
 
 FORMAT RULES:
-- Use EXACTLY this format: "Speaker N: dialogue text" where N is 1 through {num_speakers}
+- Use EXACTLY this format: "Speaker N: dialogue text" where N starts at 1
 - Each turn is separated by a blank line
-- Use EXACTLY {num_speakers} speakers
+- Choose the right number of speakers for the scenario (1 to 4 max)
 - Keep the total script under {max_words} words
 - Output ONLY the script — no stage directions, no commentary, no preamble"""
 
 
-def generate_script_from_prompt(prompt: str, num_speakers: int) -> list[dict]:
-    """Call the HF Inference API to generate a script from a prompt."""
-    system = SCRIPT_SYSTEM_PROMPT.format(
-        max_words=SCRIPT_MAX_WORDS, num_speakers=num_speakers
-    )
+def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int]:
+    """Call the HF Inference API to generate a script. Returns (turns, num_speakers)."""
+    system = SCRIPT_SYSTEM_PROMPT.format(max_words=SCRIPT_MAX_WORDS)
     response = llm_client.chat_completion(
         messages=[
             {"role": "system", "content": system},
@@ -156,7 +154,10 @@ def generate_script_from_prompt(prompt: str, num_speakers: int) -> list[dict]:
     )
     raw = response.choices[0].message.content
     turns = parse_script_to_turns(raw)
-    return turns
+    # Detect how many distinct speakers the model used
+    speaker_ids = {t["speaker"] for t in turns}
+    num_speakers = max(min(len(speaker_ids), 4), 1) if speaker_ids else 1
+    return turns, num_speakers
 
 
 # --- Modal Connection ---
@@ -474,34 +475,47 @@ def create_demo_interface():
                 )
 
                 # --- AI Script Generation ---
-                def on_generate_script(prompt, n_speakers):
+                def _no_change_result(status_text):
+                    """Helper: return gr.update() for all outputs + status text."""
+                    return (gr.update(), gr.update(), status_text,
+                            gr.update(), *[gr.update()] * 4)
+
+                def on_generate_script(prompt):
                     if not prompt or not prompt.strip():
                         gr.Warning("Please enter a prompt describing the conversation.")
-                        yield gr.update(), gr.update(), ""
+                        yield _no_change_result("")
                         return
 
-                    yield gr.update(), gr.update(), "*Generating script...*"
+                    yield _no_change_result("*Generating script...*")
 
                     try:
-                        turns = generate_script_from_prompt(prompt.strip(), int(n_speakers))
+                        turns, detected_speakers = generate_script_from_prompt(prompt.strip())
                         if not turns:
-                            yield gr.update(), gr.update(), "No script returned. Try a more descriptive prompt."
+                            yield _no_change_result("No script returned. Try a more descriptive prompt.")
                             return
-                        yield turns, estimate_duration(turns), ""
+
+                        # Auto-assign voices for the detected speaker count
+                        voices = list(AVAILABLE_VOICES[:detected_speakers])
+                        while len(voices) < 4:
+                            voices.append(None)
+
+                        yield (turns, estimate_duration(turns), "",
+                               detected_speakers, *voices[:4])
                     except Exception as e:
                         print(f"Script generation error: {e}")
                         import traceback as tb
                         tb.print_exc()
                         msg = str(e)
                         if "api_key" in msg or "log in" in msg or "token" in msg.lower():
-                            yield gr.update(), gr.update(), "HF_TOKEN secret not configured. Add it in Space Settings."
+                            yield _no_change_result("HF_TOKEN secret not configured. Add it in Space Settings.")
                         else:
-                            yield gr.update(), gr.update(), f"Error: {msg}"
+                            yield _no_change_result(f"Error: {msg}")
 
                 generate_script_btn.click(
                     fn=on_generate_script,
-                    inputs=[script_prompt, num_speakers],
-                    outputs=[turns_state, duration_display, script_gen_status],
+                    inputs=[script_prompt],
+                    outputs=[turns_state, duration_display, script_gen_status,
+                             num_speakers] + speaker_selections,
                 )
 
                 # --- Load example scripts ---
