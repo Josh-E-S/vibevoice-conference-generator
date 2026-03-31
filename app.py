@@ -212,9 +212,34 @@ def build_primary_status(stage: str, status_line: str) -> str:
 # --- Build Interface ---
 
 def create_demo_interface():
+    SPEAKER_COLORS = ["#6366f1", "#e879a0", "#22c55e", "#f59e0b"]  # indigo, pink, green, amber
+
+    speaker_css = """
+    .conversation-scroll {
+        max-height: 500px;
+        overflow-y: auto;
+        border: 1px solid var(--border-color-primary);
+        border-radius: 8px;
+        padding: 8px;
+    }
+    """
+    for i, color in enumerate(SPEAKER_COLORS):
+        speaker_css += f"""
+    .speaker-{i + 1} {{
+        border-left: 4px solid {color} !important;
+        padding-left: 8px !important;
+        margin-bottom: 4px !important;
+        border-radius: 6px !important;
+    }}
+    .speaker-{i + 1} .wrap {{
+        border-color: {color}33 !important;
+    }}
+    """
+
     with gr.Blocks(
         title="VibeVoice - Conference Generator",
         theme=theme,
+        css=speaker_css,
     ) as interface:
         # --- Banner ---
         gr.HTML("""
@@ -305,75 +330,80 @@ def create_demo_interface():
                                     example_buttons.append(btn)
 
                 # --- Conversation Editor ---
-                gr.Markdown("### Conversation")
-                duration_display = gr.Markdown(value="")
+                with gr.Row():
+                    gr.Markdown("### Conversation")
+                    duration_display = gr.Markdown(value="")
 
-                @gr.render(inputs=[turns_state, num_speakers])
-                def render_turns(turns, n_speakers):
-                    if not turns:
-                        gr.Markdown("*No script yet. Generate one with AI above, load an example, or add turns manually.*")
-                    else:
-                        speaker_choices = [f"Speaker {i + 1}" for i in range(int(n_speakers))]
-                        for idx, turn in enumerate(turns):
-                            with gr.Row(key=f"turn-{idx}"):
-                                spk_dd = gr.Dropdown(
-                                    choices=speaker_choices,
-                                    value=f"Speaker {turn['speaker']}",
-                                    label="",
-                                    scale=1,
-                                    min_width=120,
-                                    container=False,
-                                    key=f"spk-{idx}",
+                with gr.Column(elem_classes="conversation-scroll"):
+                    @gr.render(inputs=[turns_state, num_speakers])
+                    def render_turns(turns, n_speakers):
+                        if not turns:
+                            gr.Markdown("*No script yet. Generate one with AI above, load an example, or add turns manually.*")
+                        else:
+                            speaker_choices = [f"Speaker {i + 1}" for i in range(int(n_speakers))]
+                            for idx, turn in enumerate(turns):
+                                spk_num = turn["speaker"]
+                                color_class = f"speaker-{spk_num}" if 1 <= spk_num <= 4 else "speaker-1"
+
+                                with gr.Row(key=f"turn-{idx}", elem_classes=color_class):
+                                    spk_dd = gr.Dropdown(
+                                        choices=speaker_choices,
+                                        value=f"Speaker {spk_num}",
+                                        label="",
+                                        scale=1,
+                                        min_width=120,
+                                        container=False,
+                                        key=f"spk-{idx}",
+                                    )
+                                    txt = gr.Textbox(
+                                        value=turn["text"],
+                                        label="",
+                                        lines=2,
+                                        max_lines=6,
+                                        scale=5,
+                                        container=False,
+                                        key=f"txt-{idx}",
+                                    )
+                                    del_btn = gr.Button("X", size="sm", variant="stop", scale=0, min_width=40, key=f"del-{idx}")
+
+                                # Update turn text when user edits
+                                def on_text_change(new_text, current_turns, i=idx):
+                                    if i < len(current_turns):
+                                        current_turns[i]["text"] = new_text
+                                    return current_turns
+
+                                txt.change(
+                                    fn=on_text_change,
+                                    inputs=[txt, turns_state],
+                                    outputs=[turns_state],
+                                    queue=False,
                                 )
-                                txt = gr.Textbox(
-                                    value=turn["text"],
-                                    label="",
-                                    lines=2,
-                                    max_lines=6,
-                                    scale=5,
-                                    container=False,
-                                    key=f"txt-{idx}",
+
+                                # Update speaker when user changes dropdown
+                                def on_speaker_change(new_spk, current_turns, i=idx):
+                                    if i < len(current_turns):
+                                        num = int(new_spk.replace("Speaker ", ""))
+                                        current_turns[i]["speaker"] = num
+                                    return current_turns
+
+                                spk_dd.change(
+                                    fn=on_speaker_change,
+                                    inputs=[spk_dd, turns_state],
+                                    outputs=[turns_state],
+                                    queue=False,
                                 )
-                                del_btn = gr.Button("X", size="sm", variant="stop", scale=0, min_width=40, key=f"del-{idx}")
 
-                            # Update turn text when user edits
-                            def on_text_change(new_text, current_turns, i=idx):
-                                if i < len(current_turns):
-                                    current_turns[i]["text"] = new_text
-                                return current_turns
+                                # Delete turn
+                                def on_delete(current_turns, i=idx):
+                                    if i < len(current_turns):
+                                        current_turns.pop(i)
+                                    return current_turns
 
-                            txt.change(
-                                fn=on_text_change,
-                                inputs=[txt, turns_state],
-                                outputs=[turns_state],
-                                queue=False,
-                            )
-
-                            # Update speaker when user changes dropdown
-                            def on_speaker_change(new_spk, current_turns, i=idx):
-                                if i < len(current_turns):
-                                    num = int(new_spk.replace("Speaker ", ""))
-                                    current_turns[i]["speaker"] = num
-                                return current_turns
-
-                            spk_dd.change(
-                                fn=on_speaker_change,
-                                inputs=[spk_dd, turns_state],
-                                outputs=[turns_state],
-                                queue=False,
-                            )
-
-                            # Delete turn
-                            def on_delete(current_turns, i=idx):
-                                if i < len(current_turns):
-                                    current_turns.pop(i)
-                                return current_turns
-
-                            del_btn.click(
-                                fn=on_delete,
-                                inputs=[turns_state],
-                                outputs=[turns_state],
-                            )
+                                del_btn.click(
+                                    fn=on_delete,
+                                    inputs=[turns_state],
+                                    outputs=[turns_state],
+                                )
 
                 with gr.Row():
                     add_turn_btn = gr.Button("+ Add Turn", size="sm", variant="secondary")
