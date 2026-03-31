@@ -16,6 +16,7 @@ DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 SCRIPT_MAX_WORDS = 1000
 
+
 # --- Load example scripts ---
 def load_example_scripts():
     examples_dir = "text_examples"
@@ -61,6 +62,7 @@ def load_example_scripts():
 SCRIPT_SPEAKER_COUNTS = [1, 1, 2, 2, 3, 3, 4, 4]
 EXAMPLE_SCRIPTS, EXAMPLE_SCRIPTS_NATURAL = load_example_scripts()
 
+
 # --- Script parsing helpers ---
 
 def parse_script_to_turns(script_text: str) -> list[dict]:
@@ -84,7 +86,6 @@ def parse_script_to_turns(script_text: str) -> list[dict]:
             if current_speaker is not None:
                 current_text.append(line.strip())
             else:
-                # Line without a speaker tag — assign to Speaker 1
                 current_speaker = 1
                 current_text = [line.strip()]
 
@@ -110,8 +111,8 @@ def estimate_duration(turns: list[dict]) -> str:
         return ""
     minutes = total_words / 150
     if minutes < 1:
-        return f"~{int(minutes * 60)} seconds"
-    return f"~{minutes:.1f} minutes"
+        return f"~{int(minutes * 60)}s"
+    return f"~{minutes:.1f}m"
 
 
 # --- AI Script Generation ---
@@ -154,7 +155,6 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int]:
     )
     raw = response.choices[0].message.content
     turns = parse_script_to_turns(raw)
-    # Detect how many distinct speakers the model used
     speaker_ids = {t["speaker"] for t in turns}
     num_speakers = max(min(len(speaker_ids), 4), 1) if speaker_ids else 1
     return turns, num_speakers
@@ -171,36 +171,104 @@ except modal.exception.NotFoundError:
     print("Please deploy the Modal app first: modal deploy backend_modal/modal_runner.py")
     remote_generate_function = None
 
-# --- Gradio UI ---
+
+# --- Theme & CSS ---
 theme = gr.themes.Ocean(
     primary_hue="indigo",
     secondary_hue="fuchsia",
     neutral_hue="slate",
 ).set(button_large_radius="*radius_sm")
 
-AUDIO_LABEL_DEFAULT = "Complete Conference (Download)"
+SPEAKER_COLORS = ["#6366f1", "#ec4899", "#22c55e", "#f59e0b"]
+SPEAKER_LABELS = ["Speaker 1", "Speaker 2", "Speaker 3", "Speaker 4"]
+
+CUSTOM_CSS = """
+/* ---- Conversation scroll container ---- */
+.conversation-scroll {
+    max-height: 480px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color-primary);
+    border-radius: 10px;
+    padding: 10px;
+    background: var(--background-fill-secondary);
+}
+.conversation-scroll::-webkit-scrollbar { width: 6px; }
+.conversation-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-color-primary);
+    border-radius: 3px;
+}
+
+/* ---- Speaker color bars ---- */
+""" + "\n".join(f"""
+.speaker-{i+1} {{
+    border-left: 4px solid {c} !important;
+    padding-left: 10px !important;
+    margin-bottom: 6px !important;
+    border-radius: 8px !important;
+    background: {c}08 !important;
+}}""" for i, c in enumerate(SPEAKER_COLORS)) + """
+
+/* ---- Prompt bar ---- */
+.prompt-bar {
+    border: 1px solid var(--border-color-primary);
+    border-radius: 12px;
+    padding: 16px;
+    background: var(--background-fill-secondary);
+}
+
+/* ---- Voice chips row ---- */
+.voice-row {
+    border: 1px solid var(--border-color-primary);
+    border-radius: 10px;
+    padding: 12px 16px;
+    background: var(--background-fill-secondary);
+}
+
+/* ---- Example pill buttons ---- */
+.example-btn button {
+    border-radius: 20px !important;
+    font-size: 0.85em !important;
+}
+
+/* ---- Generate CTA ---- */
+.generate-cta button {
+    font-size: 1.1em !important;
+    padding: 14px !important;
+    letter-spacing: 0.02em;
+}
+
+/* ---- Sticky empty state ---- */
+.empty-state {
+    text-align: center;
+    padding: 48px 20px !important;
+    opacity: 0.6;
+}
+"""
+
+
+# --- Status helpers ---
+AUDIO_LABEL_DEFAULT = "Generated Audio"
 PRIMARY_STAGE_MESSAGES = {
-    "connecting": ("Request Submitted", "Provisioning GPU resources... cold starts can take up to a minute."),
-    "queued": ("Waiting For GPU", "Worker is spinning up. Cold starts may take 30-60 seconds."),
+    "connecting": ("Submitted", "Provisioning GPU resources... cold starts can take up to a minute."),
+    "queued": ("Queued", "Worker is spinning up. Cold starts may take 30-60 seconds."),
     "loading_model": ("Loading Model", "Streaming VibeVoice weights to the GPU."),
     "loading_voices": ("Loading Voices", None),
-    "preparing_inputs": ("Preparing Script", "Formatting the conversation for the model."),
-    "generating_audio": ("Generating Audio", "Synthesizing speech — this is the longest step."),
-    "processing_audio": ("Finalizing Audio", "Converting tensors into a playable waveform."),
-    "complete": ("Ready", "Press play below or download your conference."),
+    "preparing_inputs": ("Preparing", "Formatting the conversation for the model."),
+    "generating_audio": ("Generating", "Synthesizing speech — this is the longest step."),
+    "processing_audio": ("Finalizing", "Converting tensors into a playable waveform."),
+    "complete": ("Complete", "Press play below or download your audio."),
     "error": ("Error", "Check the log for details."),
 }
 AUDIO_STAGE_LABELS = {
-    "connecting": "Complete Conference (requesting GPU...)",
-    "queued": "Complete Conference (GPU warming up...)",
-    "loading_model": "Complete Conference (loading model...)",
-    "loading_voices": "Complete Conference (loading voices...)",
-    "preparing_inputs": "Complete Conference (preparing inputs...)",
-    "generating_audio": "Complete Conference (generating audio...)",
-    "processing_audio": "Complete Conference (finalizing audio...)",
-    "error": "Complete Conference (error)",
+    "connecting": "Audio (requesting GPU...)",
+    "queued": "Audio (GPU warming up...)",
+    "loading_model": "Audio (loading model...)",
+    "loading_voices": "Audio (loading voices...)",
+    "preparing_inputs": "Audio (preparing...)",
+    "generating_audio": "Audio (generating...)",
+    "processing_audio": "Audio (finalizing...)",
+    "error": "Audio (error)",
 }
-READY_PRIMARY_STATUS = "### Ready\nPress **Generate Conference** to run VibeVoice."
 
 
 def build_primary_status(stage: str, status_line: str) -> str:
@@ -214,215 +282,175 @@ def build_primary_status(stage: str, status_line: str) -> str:
     return f"### {title}\n{desc}"
 
 
-# --- Build Interface ---
+# ========================================================
+# BUILD INTERFACE
+# ========================================================
 
 def create_demo_interface():
-    SPEAKER_COLORS = ["#6366f1", "#e879a0", "#22c55e", "#f59e0b"]  # indigo, pink, green, amber
-
-    speaker_css = """
-    .conversation-scroll {
-        max-height: 500px;
-        overflow-y: auto;
-        border: 1px solid var(--border-color-primary);
-        border-radius: 8px;
-        padding: 8px;
-    }
-    """
-    for i, color in enumerate(SPEAKER_COLORS):
-        speaker_css += f"""
-    .speaker-{i + 1} {{
-        border-left: 4px solid {color} !important;
-        padding-left: 8px !important;
-        margin-bottom: 4px !important;
-        border-radius: 6px !important;
-    }}
-    .speaker-{i + 1} .wrap {{
-        border-color: {color}33 !important;
-    }}
-    """
-
     with gr.Blocks(
         title="VibeVoice - Conference Generator",
         theme=theme,
-        css=speaker_css,
+        css=CUSTOM_CSS,
     ) as interface:
-        # --- Banner ---
+
+        # --- State ---
+        turns_state = gr.State([])
+
+        # ---- BANNER ----
         gr.HTML("""
-        <div style="width: 100%; margin-bottom: 20px;">
+        <div style="width:100%; margin-bottom:12px;">
             <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/banner.png"
-                style="width: 100%; height: auto; border-radius: 15px; box-shadow: 0 10px 40px rgba(0,0,0,0.2);"
-                alt="VibeVoice Banner">
+                 style="width:100%; height:auto; border-radius:14px; box-shadow:0 8px 32px rgba(0,0,0,0.25);"
+                 alt="VibeVoice Banner">
         </div>
         """)
 
         with gr.Tabs():
             # ==================== GENERATE TAB ====================
             with gr.Tab("Generate"):
-                gr.Markdown("**Tip:** The 1.5B model is recommended — much faster with minimal quality difference.")
 
-                # --- Conversation state: list of {speaker: int, text: str} ---
-                turns_state = gr.State([])
+                # ---- PROMPT BAR ----
+                with gr.Group(elem_classes="prompt-bar"):
+                    script_prompt = gr.Textbox(
+                        label="Describe your conversation",
+                        placeholder="A wizard and an orc debating battle strategy before a siege...",
+                        lines=2,
+                        max_lines=3,
+                    )
+                    with gr.Row():
+                        generate_script_btn = gr.Button(
+                            "Write Script with AI", variant="secondary", scale=2,
+                        )
+                        script_gen_status = gr.Markdown(value="", scale=3)
 
-                # --- Top row: Settings (left) + Script Tools (right) ---
+                # ---- EXAMPLE PILLS ----
+                example_names = [
+                    "AI TED Talk", "Political Speech",
+                    "Finance IPO", "Telehealth",
+                    "Military Briefing", "Oil & Energy",
+                    "Game Dev Meeting", "Product Review",
+                ]
                 with gr.Row():
-                    # ---------- LEFT COLUMN: Settings ----------
-                    with gr.Column(scale=1):
-                        gr.Markdown("### Settings")
+                    use_natural = gr.Checkbox(value=True, label="Natural speech", scale=0, min_width=140)
+                    example_buttons = []
+                    for name in example_names:
+                        btn = gr.Button(name, size="sm", variant="secondary",
+                                        elem_classes="example-btn", min_width=80)
+                        example_buttons.append(btn)
+
+                # ---- CONVERSATION EDITOR ----
+                with gr.Row():
+                    gr.Markdown("### Script")
+                    duration_display = gr.Markdown(value="")
+
+                with gr.Column(elem_classes="conversation-scroll"):
+                    @gr.render(inputs=[turns_state, gr.State(4)])
+                    def render_turns(turns, _max):
+                        if not turns:
+                            gr.Markdown(
+                                "Your conversation will appear here.\n\n"
+                                "Type a prompt above and click **Write Script with AI**, "
+                                "or pick an example to get started.",
+                                elem_classes="empty-state",
+                            )
+                            return
+
+                        # Detect how many speakers are in the current script
+                        n_speakers = max(t["speaker"] for t in turns) if turns else 1
+                        speaker_choices = [f"Speaker {i+1}" for i in range(max(n_speakers, 1))]
+
+                        for idx, turn in enumerate(turns):
+                            spk_num = turn["speaker"]
+                            color_class = f"speaker-{spk_num}" if 1 <= spk_num <= 4 else "speaker-1"
+
+                            with gr.Row(key=f"turn-{idx}", elem_classes=color_class):
+                                spk_dd = gr.Dropdown(
+                                    choices=speaker_choices,
+                                    value=f"Speaker {spk_num}",
+                                    label="",
+                                    scale=1, min_width=115,
+                                    container=False,
+                                    key=f"spk-{idx}",
+                                )
+                                txt = gr.Textbox(
+                                    value=turn["text"],
+                                    label="",
+                                    lines=2, max_lines=8,
+                                    scale=6,
+                                    container=False,
+                                    key=f"txt-{idx}",
+                                )
+                                del_btn = gr.Button(
+                                    "X", size="sm", variant="stop",
+                                    scale=0, min_width=36, key=f"del-{idx}",
+                                )
+
+                            def on_text_change(new_text, current_turns, i=idx):
+                                if i < len(current_turns):
+                                    current_turns[i]["text"] = new_text
+                                return current_turns
+
+                            txt.change(fn=on_text_change, inputs=[txt, turns_state],
+                                       outputs=[turns_state], queue=False)
+
+                            def on_speaker_change(new_spk, current_turns, i=idx):
+                                if i < len(current_turns):
+                                    current_turns[i]["speaker"] = int(new_spk.replace("Speaker ", ""))
+                                return current_turns
+
+                            spk_dd.change(fn=on_speaker_change, inputs=[spk_dd, turns_state],
+                                          outputs=[turns_state], queue=False)
+
+                            def on_delete(current_turns, i=idx):
+                                if i < len(current_turns):
+                                    current_turns.pop(i)
+                                return current_turns
+
+                            del_btn.click(fn=on_delete, inputs=[turns_state],
+                                          outputs=[turns_state])
+
+                add_turn_btn = gr.Button("+ Add Turn", size="sm", variant="secondary")
+
+                # ---- VOICE & MODEL SETTINGS ----
+                # Hidden slider that gets auto-set — not shown to user
+                num_speakers = gr.Slider(
+                    minimum=1, maximum=4, value=2, step=1,
+                    visible=False,
+                )
+
+                with gr.Group(elem_classes="voice-row"):
+                    with gr.Row():
                         model_dropdown = gr.Dropdown(
                             choices=AVAILABLE_MODELS,
                             value=AVAILABLE_MODELS[0],
                             label="Model",
+                            scale=1,
                         )
-                        num_speakers = gr.Slider(
-                            minimum=1, maximum=4, value=2, step=1,
-                            label="Number of Speakers",
-                        )
-
                         speaker_selections = []
                         for i in range(4):
-                            speaker = gr.Dropdown(
+                            s = gr.Dropdown(
                                 choices=AVAILABLE_VOICES,
                                 value=DEFAULT_SPEAKERS[i] if i < len(DEFAULT_SPEAKERS) else None,
-                                label=f"Speaker {i + 1}",
+                                label=f"Voice {i+1}",
                                 visible=(i < 2),
+                                scale=1,
                             )
-                            speaker_selections.append(speaker)
+                            speaker_selections.append(s)
+                    with gr.Row():
+                        cfg_scale = gr.Slider(
+                            minimum=1.0, maximum=2.0, value=1.3, step=0.05,
+                            label="CFG Scale",
+                            scale=3,
+                        )
 
-                        with gr.Accordion("Advanced Settings", open=False):
-                            cfg_scale = gr.Slider(
-                                minimum=1.0, maximum=2.0, value=1.3, step=0.05,
-                                label="CFG Scale (Guidance Strength)",
-                            )
-
-                    # ---------- RIGHT COLUMN: Script creation ----------
-                    with gr.Column(scale=2):
-                        # --- AI Script Generator ---
-                        with gr.Accordion("Generate a Script with AI", open=True):
-                            gr.Markdown("Describe the conversation you want and AI will write the script for you.")
-                            script_prompt = gr.Textbox(
-                                label="Prompt",
-                                placeholder="e.g. A wizard consulting an orc about battle strategy for an upcoming siege",
-                                lines=2,
-                                max_lines=4,
-                            )
-                            with gr.Row():
-                                generate_script_btn = gr.Button(
-                                    "Generate Script", variant="secondary",
-                                )
-                                script_gen_status = gr.Markdown(value="")
-
-                        # --- Example buttons ---
-                        with gr.Accordion("Example Scripts", open=False):
-                            with gr.Row():
-                                use_natural = gr.Checkbox(
-                                    value=True,
-                                    label="Natural talking sounds",
-                                )
-                            example_names = [
-                                "AI TED Talk", "Political Speech",
-                                "Finance IPO Meeting", "Telehealth Meeting",
-                                "Military Meeting", "Oil Meeting",
-                                "Game Creation Meeting", "Product Meeting",
-                            ]
-                            example_buttons = []
-                            with gr.Row():
-                                for i in range(4):
-                                    btn = gr.Button(example_names[i], size="sm", variant="secondary")
-                                    example_buttons.append(btn)
-                            with gr.Row():
-                                for i in range(4, 8):
-                                    btn = gr.Button(example_names[i], size="sm", variant="secondary")
-                                    example_buttons.append(btn)
-
-                # --- Conversation Editor ---
-                with gr.Row():
-                    gr.Markdown("### Conversation")
-                    duration_display = gr.Markdown(value="")
-
-                with gr.Column(elem_classes="conversation-scroll"):
-                    @gr.render(inputs=[turns_state, num_speakers])
-                    def render_turns(turns, n_speakers):
-                        if not turns:
-                            gr.Markdown("*No script yet. Generate one with AI above, load an example, or add turns manually.*")
-                        else:
-                            speaker_choices = [f"Speaker {i + 1}" for i in range(int(n_speakers))]
-                            for idx, turn in enumerate(turns):
-                                spk_num = turn["speaker"]
-                                color_class = f"speaker-{spk_num}" if 1 <= spk_num <= 4 else "speaker-1"
-
-                                with gr.Row(key=f"turn-{idx}", elem_classes=color_class):
-                                    spk_dd = gr.Dropdown(
-                                        choices=speaker_choices,
-                                        value=f"Speaker {spk_num}",
-                                        label="",
-                                        scale=1,
-                                        min_width=120,
-                                        container=False,
-                                        key=f"spk-{idx}",
-                                    )
-                                    txt = gr.Textbox(
-                                        value=turn["text"],
-                                        label="",
-                                        lines=2,
-                                        max_lines=6,
-                                        scale=5,
-                                        container=False,
-                                        key=f"txt-{idx}",
-                                    )
-                                    del_btn = gr.Button("X", size="sm", variant="stop", scale=0, min_width=40, key=f"del-{idx}")
-
-                                # Update turn text when user edits
-                                def on_text_change(new_text, current_turns, i=idx):
-                                    if i < len(current_turns):
-                                        current_turns[i]["text"] = new_text
-                                    return current_turns
-
-                                txt.change(
-                                    fn=on_text_change,
-                                    inputs=[txt, turns_state],
-                                    outputs=[turns_state],
-                                    queue=False,
-                                )
-
-                                # Update speaker when user changes dropdown
-                                def on_speaker_change(new_spk, current_turns, i=idx):
-                                    if i < len(current_turns):
-                                        num = int(new_spk.replace("Speaker ", ""))
-                                        current_turns[i]["speaker"] = num
-                                    return current_turns
-
-                                spk_dd.change(
-                                    fn=on_speaker_change,
-                                    inputs=[spk_dd, turns_state],
-                                    outputs=[turns_state],
-                                    queue=False,
-                                )
-
-                                # Delete turn
-                                def on_delete(current_turns, i=idx):
-                                    if i < len(current_turns):
-                                        current_turns.pop(i)
-                                    return current_turns
-
-                                del_btn.click(
-                                    fn=on_delete,
-                                    inputs=[turns_state],
-                                    outputs=[turns_state],
-                                )
-
-                with gr.Row():
-                    add_turn_btn = gr.Button("+ Add Turn", size="sm", variant="secondary")
-
-                # --- Generate Conference ---
+                # ---- GENERATE BUTTON ----
                 generate_btn = gr.Button(
-                    "Generate Conference", size="lg", variant="primary",
+                    "Generate Conference Audio", size="lg", variant="primary",
+                    elem_classes="generate-cta",
                 )
 
-                # --- Output section ---
-                primary_status = gr.Markdown(
-                    value=READY_PRIMARY_STATUS,
-                    elem_id="primary-status",
-                )
+                # ---- OUTPUT ----
+                primary_status = gr.Markdown(value="", elem_id="primary-status")
                 complete_audio_output = gr.Audio(
                     label=AUDIO_LABEL_DEFAULT,
                     type="numpy",
@@ -431,9 +459,7 @@ def create_demo_interface():
                 )
                 with gr.Accordion("Generation Log", open=False):
                     log_output = gr.Textbox(
-                        label="Log",
-                        lines=8, max_lines=15,
-                        interactive=False,
+                        label="Log", lines=8, max_lines=15, interactive=False,
                     )
 
                 # ==================== EVENT HANDLERS ====================
@@ -448,68 +474,62 @@ def create_demo_interface():
                 )
 
                 # --- Add turn ---
-                def add_turn(turns, n_speakers):
+                def add_turn(turns):
                     if not turns:
                         next_speaker = 1
                     else:
+                        max_spk = max(t["speaker"] for t in turns)
                         last = turns[-1]["speaker"]
-                        next_speaker = (last % int(n_speakers)) + 1
+                        next_speaker = (last % max_spk) + 1
                     turns.append({"speaker": next_speaker, "text": ""})
                     return turns, estimate_duration(turns)
 
                 add_turn_btn.click(
                     fn=add_turn,
-                    inputs=[turns_state, num_speakers],
+                    inputs=[turns_state],
                     outputs=[turns_state, duration_display],
                 )
 
-                # --- Update duration whenever turns change ---
-                def update_duration(turns):
-                    return estimate_duration(turns)
-
                 turns_state.change(
-                    fn=update_duration,
+                    fn=lambda turns: estimate_duration(turns),
                     inputs=[turns_state],
                     outputs=[duration_display],
                     queue=False,
                 )
 
                 # --- AI Script Generation ---
-                def _no_change_result(status_text):
-                    """Helper: return gr.update() for all outputs + status text."""
+                def _no_change(status_text):
                     return (gr.update(), gr.update(), status_text,
                             gr.update(), *[gr.update()] * 4)
 
                 def on_generate_script(prompt):
                     if not prompt or not prompt.strip():
-                        gr.Warning("Please enter a prompt describing the conversation.")
-                        yield _no_change_result("")
+                        gr.Warning("Please enter a prompt.")
+                        yield _no_change("")
                         return
 
-                    yield _no_change_result("*Generating script...*")
+                    yield _no_change("*Writing script...*")
 
                     try:
-                        turns, detected_speakers = generate_script_from_prompt(prompt.strip())
+                        turns, detected = generate_script_from_prompt(prompt.strip())
                         if not turns:
-                            yield _no_change_result("No script returned. Try a more descriptive prompt.")
+                            yield _no_change("Empty result — try a more descriptive prompt.")
                             return
 
-                        # Auto-assign voices for the detected speaker count
-                        voices = list(AVAILABLE_VOICES[:detected_speakers])
+                        voices = list(AVAILABLE_VOICES[:detected])
                         while len(voices) < 4:
                             voices.append(None)
 
                         yield (turns, estimate_duration(turns), "",
-                               detected_speakers, *voices[:4])
+                               detected, *voices[:4])
                     except Exception as e:
                         print(f"Script generation error: {e}")
-                        import traceback as tb
-                        tb.print_exc()
+                        traceback.print_exc()
                         msg = str(e)
                         if "api_key" in msg or "log in" in msg or "token" in msg.lower():
-                            yield _no_change_result("HF_TOKEN secret not configured. Add it in Space Settings.")
+                            yield _no_change("HF_TOKEN not configured. Add it in Space Settings → Secrets.")
                         else:
-                            yield _no_change_result(f"Error: {msg}")
+                            yield _no_change(f"Error: {msg}")
 
                 generate_script_btn.click(
                     fn=on_generate_script,
@@ -518,20 +538,20 @@ def create_demo_interface():
                              num_speakers] + speaker_selections,
                 )
 
-                # --- Load example scripts ---
+                # --- Load examples ---
                 def load_example(idx, natural):
                     if idx >= len(EXAMPLE_SCRIPTS):
-                        return [], 2, "" , *[None] * 4
+                        return [], 2, "", *[None] * 4
 
                     script = EXAMPLE_SCRIPTS_NATURAL[idx] if natural else EXAMPLE_SCRIPTS[idx]
                     num = SCRIPT_SPEAKER_COUNTS[idx] if idx < len(SCRIPT_SPEAKER_COUNTS) else 1
                     turns = parse_script_to_turns(script)
 
-                    speakers = list(AVAILABLE_VOICES[:num])
-                    while len(speakers) < 4:
-                        speakers.append(None)
+                    voices = list(AVAILABLE_VOICES[:num])
+                    while len(voices) < 4:
+                        voices.append(None)
 
-                    return turns, num, estimate_duration(turns), *speakers[:4]
+                    return turns, num, estimate_duration(turns), *voices[:4]
 
                 for idx, btn in enumerate(example_buttons):
                     btn.click(
@@ -541,7 +561,7 @@ def create_demo_interface():
                         queue=False,
                     )
 
-                # --- Generate Conference (audio) ---
+                # --- Generate audio ---
                 def generate_podcast_wrapper(
                     model_choice, num_speakers_val, turns, *speakers_and_params
                 ):
@@ -549,24 +569,23 @@ def create_demo_interface():
                         yield (
                             build_primary_status("error", "Modal backend is offline."),
                             gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            "ERROR: Modal function not deployed. Please contact the space owner.",
+                            "ERROR: Modal function not deployed.",
                         )
                         return
 
-                    # Assemble turns into script text
                     script = turns_to_script(turns)
                     if not script.strip():
                         yield (
                             build_primary_status("error", "No script to generate."),
                             gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            "Please add some dialogue before generating.",
+                            "Add dialogue before generating.",
                         )
                         return
 
                     yield (
-                        build_primary_status("connecting", "Provisioning GPU resources... cold starts can take up to a minute."),
+                        build_primary_status("connecting", "Provisioning GPU..."),
                         gr.update(label=AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)),
-                        "Calling remote GPU on Modal.com...",
+                        "Requesting GPU on Modal.com...",
                     )
 
                     try:
@@ -597,8 +616,7 @@ def create_demo_interface():
 
                                 audio_label = AUDIO_STAGE_LABELS.get(stage_key)
                                 if not audio_label:
-                                    stage_label = stage_key.replace("_", " ").title()
-                                    audio_label = f"Complete Conference ({stage_label.lower()})"
+                                    audio_label = f"Audio ({stage_key.replace('_',' ')})"
                                 if stage_key == "complete":
                                     audio_label = AUDIO_LABEL_DEFAULT
 
@@ -611,7 +629,6 @@ def create_demo_interface():
                                     audio_update,
                                     current_log,
                                 )
-
                                 last_audio_label = audio_label
                                 last_stage = stage_key
                             else:
@@ -620,17 +637,16 @@ def create_demo_interface():
                                 )
                                 if log_text:
                                     current_log = log_text
-
                                 if audio_payload is not None:
                                     yield (
-                                        build_primary_status("complete", "Conference ready to download."),
+                                        build_primary_status("complete", "Ready."),
                                         gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT),
                                         current_log,
                                     )
                                 else:
-                                    status_line = current_log.splitlines()[-1] if current_log else "Processing..."
                                     yield (
-                                        build_primary_status("generating_audio", status_line),
+                                        build_primary_status("generating_audio",
+                                            current_log.splitlines()[-1] if current_log else "Processing..."),
                                         gr.update(label=AUDIO_STAGE_LABELS.get("generating_audio", last_audio_label)),
                                         current_log,
                                     )
@@ -640,7 +656,7 @@ def create_demo_interface():
                         yield (
                             build_primary_status("error", "Inference failed."),
                             gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            f"An error occurred: {e}\n\n{tb}",
+                            f"Error: {e}\n\n{tb}",
                         )
 
                 generate_btn.click(
@@ -653,47 +669,34 @@ def create_demo_interface():
             with gr.Tab("Architecture"):
                 gr.Markdown("## VibeVoice: A Frontier Open-Source Text-to-Speech Model")
                 gr.Markdown(
-                    """VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker
-                conversational audio from text. It addresses challenges in traditional TTS systems — scalability, speaker
-                consistency, and natural turn-taking — using continuous speech tokenizers at an ultra-low 7.5 Hz frame rate
-                and a next-token diffusion framework. It can synthesize speech up to 90 minutes long with up to 4 distinct speakers."""
+                    """VibeVoice generates expressive, long-form, multi-speaker conversational audio from text.
+                It uses continuous speech tokenizers at an ultra-low 7.5 Hz frame rate and a next-token diffusion
+                framework to synthesize up to 90 minutes of speech with up to 4 distinct speakers."""
                 )
-
                 with gr.Row():
                     with gr.Column():
                         gr.Markdown("""
 ### Key Features
+- **Multi-Speaker**: Up to 4 distinct voices
+- **Long-Form**: Up to 90 minutes of audio
+- **Natural Flow**: Turn-taking, interruptions, filler words
+- **Efficient**: 7.5 Hz tokenizers for low compute cost
 
-- **Multi-Speaker Support**: Up to 4 distinct speakers
-- **Long-Form Generation**: Up to 90 minutes of speech
-- **Natural Conversation Flow**: Turn-taking and interruptions
-- **Ultra-Low Frame Rate**: 7.5 Hz tokenizers for efficiency
-- **High Fidelity**: Preserves acoustic details while being computationally efficient
+### Architecture
+1. **Continuous Speech Tokenizers** — Acoustic + Semantic at 7.5 Hz
+2. **Next-Token Diffusion** — LLM context + diffusion generation
+3. **Diffusion Head** — High-fidelity acoustic output
 
-### Technical Architecture
-
-1. **Continuous Speech Tokenizers**: Acoustic and Semantic tokenizers at 7.5 Hz
-2. **Next-Token Diffusion Framework**: Combines LLM understanding with diffusion generation
-3. **Large Language Model**: Understands context and dialogue flow
-4. **Diffusion Head**: Generates high-fidelity acoustic details
-
-### Model Variants
-
-- **VibeVoice-1.5B**: Faster inference, suitable for real-time applications
-- **VibeVoice-7B**: Higher quality output, recommended for production use
+### Models
+- **1.5B** — Fast inference, great for iteration
+- **7B** — Higher fidelity, longer generation time
                         """)
-
                     with gr.Column():
-                        gr.Image(
-                            value="public/images/diagram.jpg",
-                            label="Architecture Diagram",
-                            show_download_button=False,
-                        )
-                        gr.Image(
-                            value="public/images/chart.png",
-                            label="Performance Comparison",
-                            show_download_button=False,
-                        )
+                        gr.Image(value="public/images/diagram.jpg",
+                                 label="Architecture", show_download_button=False)
+                        gr.Image(value="public/images/chart.png",
+                                 label="Performance", show_download_button=False)
+
     return interface
 
 
@@ -703,8 +706,8 @@ if __name__ == "__main__":
         with gr.Blocks(theme=theme) as interface:
             gr.Markdown("# Configuration Error")
             gr.Markdown(
-                "The Gradio application cannot connect to the Modal backend. "
-                "Please run `modal deploy backend_modal/modal_runner.py` and refresh."
+                "Cannot connect to Modal backend. "
+                "Run `modal deploy backend_modal/modal_runner.py` and refresh."
             )
         interface.launch()
     else:
