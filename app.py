@@ -13,7 +13,7 @@ AVAILABLE_MODELS = ["VibeVoice-1.5B", "VibeVoice-7B"]
 AVAILABLE_VOICES = ["Cherry", "Chicago", "Janus", "Mantis", "Sponge", "Starchild"]
 DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
 
-SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-72B-Instruct"
+SCRIPT_GEN_MODEL = "mistralai/Mistral-Small-24B-Instruct-2501"
 SCRIPT_MAX_WORDS = 1000
 
 # --- Load example scripts ---
@@ -116,7 +116,8 @@ def estimate_duration(turns: list[dict]) -> str:
 
 # --- AI Script Generation ---
 
-llm_client = InferenceClient(model=SCRIPT_GEN_MODEL)
+hf_token = os.environ.get("HF_TOKEN")
+llm_client = InferenceClient(model=SCRIPT_GEN_MODEL, token=hf_token)
 
 SCRIPT_SYSTEM_PROMPT = """You are a script writer. Write a realistic, engaging conversation script.
 
