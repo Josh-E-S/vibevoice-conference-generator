@@ -238,16 +238,21 @@ CUSTOM_CSS = """
     font-size: 0.85em !important;
 }
 
-/* ---- CTA buttons ---- */
-.generate-cta button, .script-cta button {
+/* ---- CTA buttons — consistent styling ---- */
+.script-cta button, .generate-cta button {
+    border-radius: 10px !important;
+    letter-spacing: 0.02em;
+    background: var(--button-primary-background-fill) !important;
+    color: var(--button-primary-text-color) !important;
+    border: none !important;
+}
+.script-cta button {
     font-size: 1.05em !important;
     padding: 12px 24px !important;
-    letter-spacing: 0.02em;
-    border-radius: 10px !important;
 }
 .generate-cta button {
-    font-size: 1.1em !important;
-    padding: 14px !important;
+    font-size: 1.15em !important;
+    padding: 16px !important;
 }
 
 /* ---- Sticky empty state ---- */
@@ -433,7 +438,11 @@ def create_demo_interface():
                             del_btn.click(fn=on_delete, inputs=[turns_state],
                                           outputs=[turns_state])
 
-                add_turn_btn = gr.Button("+ Add Turn", size="sm", variant="secondary")
+                with gr.Row():
+                    gr.HTML("<div></div>")  # spacer
+                    add_turn_btn = gr.Button("+ Add Turn", size="sm", variant="secondary",
+                                             scale=0, min_width=120)
+                    gr.HTML("<div></div>")  # spacer
 
                 # ---- VOICE & MODEL SETTINGS ----
                 # Hidden slider that gets auto-set — not shown to user
