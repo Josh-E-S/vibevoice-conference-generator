@@ -9,31 +9,9 @@ MODAL_STUB_NAME = "vibevoice-generator"
 MODAL_CLASS_NAME = "VibeVoiceModel" # Extract class name
 MODAL_METHOD_NAME = "generate_podcast" # Extract method name
 
-# These lists are now hardcoded because the data lives on the Modal container.
-# For a more dynamic app, you could create a small Modal function to fetch these lists.
 AVAILABLE_MODELS = ["VibeVoice-1.5B", "VibeVoice-7B"]
-AVAILABLE_VOICES = [
-    "en-Alice_woman_bgm", "en-Alice_woman", "en-Carter_man", "en-Frank_man",
-    "en-Maya_woman", "en-Yasser_man", "in-Samuel_man", "zh-Anchen_man_bgm",
-    "zh-Bowen_man", "zh-Xinran_woman"
-]
-DEFAULT_SPEAKERS = ['en-Alice_woman', 'en-Carter_man', 'en-Frank_man', 'en-Maya_woman']
-
-# Male and female voice categories for smart speaker selection
-MALE_VOICES = [
-    "en-Carter_man",
-    "en-Frank_man",
-    "en-Yasser_man",
-    "in-Samuel_man",
-    "zh-Anchen_man_bgm",
-    "zh-Bowen_man"
-]
-FEMALE_VOICES = [
-    "en-Alice_woman_bgm",
-    "en-Alice_woman",
-    "en-Maya_woman",
-    "zh-Xinran_woman"
-]
+AVAILABLE_VOICES = ["Cherry", "Chicago", "Janus", "Mantis", "Sponge", "Starchild"]
+DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
 
 # Load example scripts
 def load_example_scripts():
@@ -74,17 +52,8 @@ def load_example_scripts():
     
     return example_scripts, example_scripts_natural
 
-# Gender mapping for each script's speakers
-SCRIPT_SPEAKER_GENDERS = [
-    ["female"],  # AI TED Talk - Rachel
-    ["neutral"],  # Political Speech - generic speaker
-    ["male", "female"],  # Finance IPO - James, Patricia
-    ["female", "male"],  # Telehealth - Jennifer, Tom
-    ["female", "male", "female"],  # Military - Sarah, David, Lisa
-    ["male", "female", "male"],  # Oil - Robert, Lisa, Michael
-    ["male", "female", "male", "male"],  # Game Creation - Alex, Sarah, Marcus, Emma
-    ["female", "male", "female", "male"]  # Product Meeting - Sarah, Marcus, Jennifer, David
-]
+# Number of speakers per example script
+SCRIPT_SPEAKER_COUNTS = [1, 1, 2, 2, 3, 3, 4, 4]
 
 EXAMPLE_SCRIPTS, EXAMPLE_SCRIPTS_NATURAL = load_example_scripts()
 
@@ -159,25 +128,13 @@ def create_demo_interface():
                 alt="VibeVoice Banner">
         </div>
         """)
-        gr.Markdown("## NOTE: The Large model takes significant generation time with limited increase in quality. I recommend trying 1.5B first.")
-        
         with gr.Tabs():
             with gr.Tab("Generate"):
-                gr.Markdown("### Generated Conference")
-                primary_status = gr.Markdown(
-                    value=READY_PRIMARY_STATUS,
-                    elem_id="primary-status",
-                )
-                complete_audio_output = gr.Audio(
-                    label=AUDIO_LABEL_DEFAULT,
-                    type="numpy",
-                    autoplay=False,
-                    show_download_button=True,
-                )
-                
+                gr.Markdown("**Tip:** The 1.5B model is recommended — it's much faster with minimal quality difference.")
+
                 with gr.Row():
                     with gr.Column(scale=1):
-                        gr.Markdown("### Conference Settings")
+                        gr.Markdown("### Settings")
                         model_dropdown = gr.Dropdown(
                             choices=AVAILABLE_MODELS,
                             value=AVAILABLE_MODELS[0],
@@ -188,7 +145,6 @@ def create_demo_interface():
                             label="Number of Speakers",
                         )
 
-                        gr.Markdown("### Speaker Selection")
                         speaker_selections = []
                         for i in range(4):
                             speaker = gr.Dropdown(
@@ -206,30 +162,26 @@ def create_demo_interface():
                             )
 
                     with gr.Column(scale=2):
-                        gr.Markdown("### Script Input")
                         script_input = gr.Textbox(
                             label="Conversation Script",
-                            placeholder="Enter your conference script here...",
+                            placeholder="Enter your conference script here...\n\nFormat:\nSpeaker 1: Hello everyone...\nSpeaker 2: Thanks for having me...",
                             lines=12,
                             max_lines=20,
                         )
-                        
+
                         with gr.Row():
-                            with gr.Column(scale=1):
-                                gr.Markdown("### Example Scripts")
-                                with gr.Row():
-                                    use_natural = gr.Checkbox(
-                                        value=True,
-                                        label="Natural talking sounds",
-                                        scale=1
-                                    )
-                                    duration_display = gr.Textbox(
-                                        value="",
-                                        label="Est. Duration",
-                                        interactive=False,
-                                        scale=1
-                                    )
-                        
+                            use_natural = gr.Checkbox(
+                                value=True,
+                                label="Natural talking sounds",
+                                scale=1,
+                            )
+                            duration_display = gr.Textbox(
+                                value="",
+                                label="Est. Duration",
+                                interactive=False,
+                                scale=1,
+                            )
+
                         example_names = [
                             "AI TED Talk",
                             "Political Speech",
@@ -238,42 +190,49 @@ def create_demo_interface():
                             "Military Meeting",
                             "Oil Meeting",
                             "Game Creation Meeting",
-                            "Product Meeting"
+                            "Product Meeting",
                         ]
-                        
+
                         example_buttons = []
                         with gr.Row():
                             for i in range(min(4, len(example_names))):
                                 btn = gr.Button(example_names[i], size="sm", variant="secondary")
                                 example_buttons.append(btn)
-                        
+
                         with gr.Row():
                             for i in range(4, min(8, len(example_names))):
                                 btn = gr.Button(example_names[i], size="sm", variant="secondary")
                                 example_buttons.append(btn)
-                        
-                        generate_btn = gr.Button(
-                            "🚀 Generate Conference (on Modal)", size="lg",
-                            variant="primary",
-                        )
-                        log_output = gr.Textbox(
-                            label="Generation Log",
-                            lines=8, max_lines=15,
-                            interactive=False,
-                        )
-                        with gr.Row():
-                            status_display = gr.Markdown(
-                                value="**Idle**\nPress generate to get started.",
-                                elem_id="status-display",
-                            )
-                            progress_slider = gr.Slider(
-                                minimum=0,
-                                maximum=100,
-                                value=0,
-                                step=1,
-                                label="Progress",
-                                interactive=False,
-                            )
+
+                generate_btn = gr.Button(
+                    "Generate Conference", size="lg",
+                    variant="primary",
+                )
+
+                primary_status = gr.Markdown(
+                    value=READY_PRIMARY_STATUS,
+                    elem_id="primary-status",
+                )
+                progress_slider = gr.Slider(
+                    minimum=0,
+                    maximum=100,
+                    value=0,
+                    step=1,
+                    label="Progress",
+                    interactive=False,
+                )
+                complete_audio_output = gr.Audio(
+                    label=AUDIO_LABEL_DEFAULT,
+                    type="numpy",
+                    autoplay=False,
+                    show_download_button=True,
+                )
+                with gr.Accordion("Generation Log", open=False):
+                    log_output = gr.Textbox(
+                        label="Log",
+                        lines=8, max_lines=15,
+                        interactive=False,
+                    )
 
                 def update_speaker_visibility(num_speakers):
                     return [gr.update(visible=(i < num_speakers)) for i in range(4)]
@@ -290,46 +249,21 @@ def create_demo_interface():
                     else:
                         return f"~{minutes:.1f} minutes"
                 
-                def smart_speaker_selection(gender_list):
-                    """Select speakers based on gender requirements."""
-                    selected = []
-                    for gender in gender_list:
-                        if gender == "male" and MALE_VOICES:
-                            available = [v for v in MALE_VOICES if v not in selected]
-                            if available:
-                                selected.append(available[0])
-                            else:
-                                selected.append(MALE_VOICES[0])
-                        elif gender == "female" and FEMALE_VOICES:
-                            available = [v for v in FEMALE_VOICES if v not in selected]
-                            if available:
-                                selected.append(available[0])
-                            else:
-                                selected.append(FEMALE_VOICES[0])
-                        else:
-                            # neutral or fallback
-                            available = [v for v in AVAILABLE_VOICES if v not in selected]
-                            if available:
-                                selected.append(available[0])
-                            else:
-                                selected.append(AVAILABLE_VOICES[0])
-                    return selected
-                
                 def load_specific_example(idx, natural):
                     """Load a specific example script."""
                     if idx >= len(EXAMPLE_SCRIPTS):
                         return [2, "", ""] + [None, None, None, None]
-                    
+
                     script = EXAMPLE_SCRIPTS_NATURAL[idx] if natural else EXAMPLE_SCRIPTS[idx]
-                    genders = SCRIPT_SPEAKER_GENDERS[idx] if idx < len(SCRIPT_SPEAKER_GENDERS) else ["neutral"]
-                    speakers = smart_speaker_selection(genders)
+                    num = SCRIPT_SPEAKER_COUNTS[idx] if idx < len(SCRIPT_SPEAKER_COUNTS) else 1
+                    speakers = AVAILABLE_VOICES[:num]
                     duration = estimate_duration(script)
-                    
+
                     # Pad speakers to 4
                     while len(speakers) < 4:
                         speakers.append(None)
-                    
-                    return [len(genders), script, duration] + speakers[:4]
+
+                    return [num, script, duration] + speakers[:4]
                 
                 # Connect example buttons
                 for idx, btn in enumerate(example_buttons):
@@ -356,27 +290,19 @@ def create_demo_interface():
 
                 def generate_podcast_wrapper(model_choice, num_speakers_val, script, *speakers_and_params):
                     if remote_generate_function is None:
-                        error_message = "ERROR: Modal function not deployed. Please contact the space owner."
-                        primary_error = build_primary_status("error", "Modal backend is offline.")
                         yield (
-                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            error_message,
-                            "**Error**\nModal backend unavailable.",
+                            build_primary_status("error", "Modal backend is offline."),
                             gr.update(value=0),
-                            primary_error,
+                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
+                            "ERROR: Modal function not deployed. Please contact the space owner.",
                         )
                         return
 
-                    connecting_status_line = "Provisioning GPU resources... cold starts can take up to a minute."
-                    primary_connecting = build_primary_status("connecting", connecting_status_line)
-                    status_detail = "**Connecting**\nRequesting GPU resources…"
-
                     yield (
-                        gr.update(label=AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)),
-                        "🔄 Calling remote GPU on Modal.com... this may take a moment to start.",
-                        status_detail,
+                        build_primary_status("connecting", "Provisioning GPU resources... cold starts can take up to a minute."),
                         gr.update(value=1),
-                        primary_connecting,
+                        gr.update(label=AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)),
+                        "Calling remote GPU on Modal.com...",
                     )
 
                     try:
@@ -384,12 +310,9 @@ def create_demo_interface():
                         cfg_scale_val = speakers_and_params[4]
                         current_log = ""
                         last_pct = 1
-                        last_status = status_detail
-                        last_primary = primary_connecting
                         last_audio_label = AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)
                         last_stage = "connecting"
 
-                        # Stream updates from the Modal function
                         for update in remote_generate_function.remote_gen(
                             num_speakers=int(num_speakers_val),
                             script=script,
@@ -409,152 +332,110 @@ def create_demo_interface():
                                 stage_key = update.get("stage", last_stage) or last_stage
                                 status_line = update.get("status") or "Processing..."
                                 current_log = update.get("log", current_log)
-
-                                stage_label = stage_key.replace("_", " ").title() if stage_key else "Status"
-                                status_formatted = f"**{stage_label}**\n{status_line}"
                                 progress_value = max(0, min(100, int(round(progress_pct))))
 
                                 audio_label = AUDIO_STAGE_LABELS.get(stage_key)
                                 if not audio_label:
-                                    audio_label = f"Complete Conference ({stage_label.lower()})" if stage_label else AUDIO_LABEL_DEFAULT
+                                    stage_label = stage_key.replace("_", " ").title()
+                                    audio_label = f"Complete Conference ({stage_label.lower()})"
                                 if stage_key == "complete":
                                     audio_label = AUDIO_LABEL_DEFAULT
                                 if stage_key == "error":
                                     progress_value = 0
 
-                                primary_value = build_primary_status(stage_key, status_line)
-
                                 audio_update = gr.update(label=audio_label)
                                 if audio_payload is not None:
                                     audio_update = gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT)
 
                                 yield (
+                                    build_primary_status(stage_key, status_line),
+                                    gr.update(value=progress_value),
                                     audio_update,
                                     current_log,
-                                    status_formatted,
-                                    gr.update(value=progress_value),
-                                    primary_value,
                                 )
 
                                 last_pct = progress_value
-                                last_status = status_formatted
-                                last_primary = primary_value
                                 last_audio_label = audio_label
                                 last_stage = stage_key
                             else:
-                                # Backwards compatibility: older backend returns (audio, log)
                                 audio_payload, log_text = update if isinstance(update, (tuple, list)) else (None, str(update))
-                                status_line = None
                                 if log_text:
                                     current_log = log_text
-                                    status_line = log_text.splitlines()[-1]
-                                if not status_line:
-                                    status_line = "Processing..."
 
-                                if audio_payload is not None:
-                                    progress_value = 100
-                                    audio_label = AUDIO_LABEL_DEFAULT
-                                    primary_value = build_primary_status("complete", "Conference ready to download.")
-                                    status_formatted = "**Complete**\nConference ready to download."
-                                else:
-                                    progress_value = max(last_pct, 70)
-                                    audio_label = AUDIO_STAGE_LABELS.get("generating_audio", last_audio_label)
-                                    primary_value = build_primary_status("generating_audio", status_line)
-                                    status_formatted = f"**Streaming**\n{status_line}"
-
-                                audio_update = gr.update(label=audio_label)
                                 if audio_payload is not None:
                                     audio_update = gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT)
-
-                                last_pct = progress_value
-                                last_status = status_formatted
-                                last_primary = primary_value
-                                last_audio_label = audio_label
-
-                                yield (
-                                    audio_update,
-                                    current_log,
-                                    status_formatted,
-                                    gr.update(value=progress_value),
-                                    primary_value,
-                                )
+                                    yield (
+                                        build_primary_status("complete", "Conference ready to download."),
+                                        gr.update(value=100),
+                                        audio_update,
+                                        current_log,
+                                    )
+                                else:
+                                    status_line = current_log.splitlines()[-1] if current_log else "Processing..."
+                                    yield (
+                                        build_primary_status("generating_audio", status_line),
+                                        gr.update(value=max(last_pct, 70)),
+                                        gr.update(label=AUDIO_STAGE_LABELS.get("generating_audio", last_audio_label)),
+                                        current_log,
+                                    )
                     except Exception as e:
                         tb = traceback.format_exc()
                         print(f"Error calling Modal: {e}")
-                        error_log = f"❌ An error occurred: {e}\n\n{tb}"
-                        primary_error = build_primary_status("error", "Inference failed.")
                         yield (
-                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            error_log,
-                            "**Error**\nInference failed.",
+                            build_primary_status("error", "Inference failed."),
                             gr.update(value=0),
-                            primary_error,
+                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
+                            f"An error occurred: {e}\n\n{tb}",
                         )
 
                 generate_btn.click(
                     fn=generate_podcast_wrapper,
                     inputs=[model_dropdown, num_speakers, script_input] + speaker_selections + [cfg_scale],
-                    outputs=[complete_audio_output, log_output, status_display, progress_slider, primary_status]
+                    outputs=[primary_status, progress_slider, complete_audio_output, log_output],
                 )
             
             with gr.Tab("Architecture"):
-                with gr.Row():
-                    gr.Markdown("""VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, 
-                    such as conferences, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, particularly 
-                    in scalability, speaker consistency, and natural turn-taking. A core innovation of VibeVoice is its use of continuous 
-                    speech tokenizers (Acoustic and Semantic) operating at an ultra-low frame rate of 7.5 Hz. These tokenizers efficiently 
-                    preserve audio fidelity while significantly boosting computational efficiency for processing long sequences. VibeVoice 
-                    employs a next-token diffusion framework, leveraging a Large Language Model (LLM) to understand textual context and 
-                    dialogue flow, and a diffusion head to generate high-fidelity acoustic details. The model can synthesize speech up to 
-                    90 minutes long with up to 4 distinct speakers, surpassing the typical 1-2 speaker limits of many prior models.""")
-                with gr.Row():    
-                    with gr.Column():
-                        gr.Markdown("## VibeVoice: A Frontier Open-Source Text-to-Speech Model")
+                gr.Markdown("## VibeVoice: A Frontier Open-Source Text-to-Speech Model")
+                gr.Markdown("""VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker
+                conversational audio from text. It addresses challenges in traditional TTS systems — scalability, speaker
+                consistency, and natural turn-taking — using continuous speech tokenizers at an ultra-low 7.5 Hz frame rate
+                and a next-token diffusion framework. It can synthesize speech up to 90 minutes long with up to 4 distinct speakers.""")
 
-                        gr.Markdown("""
-                        ### Overview
-                        
-                        VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, 
-                        such as conferences, from text. It addresses significant challenges in traditional Text-to-Speech (TTS) systems, 
-                        particularly in scalability, speaker consistency, and natural turn-taking.
-                        
-                        ### Key Features
-                        
-                        - **Multi-Speaker Support**: Handles up to 4 distinct speakers
-                        - **Long-Form Generation**: Synthesizes speech up to 90 minutes
-                        - **Natural Conversation Flow**: Includes turn-taking and interruptions
-                        - **Ultra-Low Frame Rate**: 7.5 Hz tokenizers for efficiency
-                        - **High Fidelity**: Preserves acoustic details while being computationally efficient
-                        
-                        ### Technical Architecture
-                        
-                        1. **Continuous Speech Tokenizers**: Acoustic and Semantic tokenizers at 7.5 Hz
-                        2. **Next-Token Diffusion Framework**: Combines LLM understanding with diffusion generation
-                        3. **Large Language Model**: Understands context and dialogue flow
-                        4. **Diffusion Head**: Generates high-fidelity acoustic details
-                        """)
-                        
+                with gr.Row():
                     with gr.Column():
-                        gr.HTML("""
-                        <div style="width: 100%; padding: 20px;">
-                            <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/diagram.jpg" 
-                                style="width: 100%; height: auto; border-radius: 10px; box-shadow: 0 5px 20px rgba(0,0,0,0.15);"
-                                alt="VibeVoice Architecture Diagram">
-                        </div>
-                        """)
-                        
                         gr.Markdown("""
-                        ### Model Variants
-                        
-                        **VibeVoice-1.5B**: Faster inference, suitable for real-time applications
-                        **VibeVoice-7B**: Higher quality output, recommended for production use
-                        
-                        ### Performance Metrics
-                        
-                        <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/chart.png" 
-                            style="width: 100%; height: auto; border-radius: 10px; margin-top: 20px;"
-                            alt="Performance Comparison">
+### Key Features
+
+- **Multi-Speaker Support**: Up to 4 distinct speakers
+- **Long-Form Generation**: Up to 90 minutes of speech
+- **Natural Conversation Flow**: Turn-taking and interruptions
+- **Ultra-Low Frame Rate**: 7.5 Hz tokenizers for efficiency
+- **High Fidelity**: Preserves acoustic details while being computationally efficient
+
+### Technical Architecture
+
+1. **Continuous Speech Tokenizers**: Acoustic and Semantic tokenizers at 7.5 Hz
+2. **Next-Token Diffusion Framework**: Combines LLM understanding with diffusion generation
+3. **Large Language Model**: Understands context and dialogue flow
+4. **Diffusion Head**: Generates high-fidelity acoustic details
+
+### Model Variants
+
+- **VibeVoice-1.5B**: Faster inference, suitable for real-time applications
+- **VibeVoice-7B**: Higher quality output, recommended for production use
                         """)
+
+                    with gr.Column():
+                        gr.Image(
+                            value="public/images/diagram.jpg",
+                            label="Architecture Diagram",
+                            show_download_button=False,
+                        )
+                        gr.Image(
+                            value="public/images/chart.png",
+                            label="Performance Comparison",
+                            show_download_button=False,
+                        )
     return interface
 
 # --- Main Execution ---
