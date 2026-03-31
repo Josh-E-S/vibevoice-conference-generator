@@ -328,29 +328,28 @@ def create_demo_interface():
             with gr.Tab("Generate"):
 
                 # ---- PROMPT BAR ----
-                with gr.Group(elem_classes="prompt-bar"):
-                    gr.HTML("""
-                    <p style="margin:0 0 8px 0; opacity:0.8; font-size:0.95em;">
-                        Describe any scenario — two people, a panel, a debate — and AI will write the full script.
-                        Then review, edit, assign voices, and generate audio.
-                    </p>
-                    """)
-                    script_prompt = gr.Textbox(
-                        label="Describe your conversation",
-                        placeholder="A wizard and an orc debating battle strategy before a siege...",
-                        lines=2,
-                        max_lines=3,
+                gr.HTML("""
+                <p style="margin:0 0 8px 0; opacity:0.7; font-size:0.95em;">
+                    Describe any scenario — two people, a panel, a debate — and AI will write the full script.
+                    Then review, edit, assign voices, and generate audio.
+                </p>
+                """)
+                script_prompt = gr.Textbox(
+                    label="Describe your conversation",
+                    placeholder="A wizard and an orc debating battle strategy before a siege...",
+                    lines=2,
+                    max_lines=3,
+                )
+                with gr.Row():
+                    generate_script_btn = gr.Button(
+                        "Write Script with AI", variant="primary",
+                        size="lg",
+                        elem_classes="script-cta",
                     )
-                    with gr.Row():
-                        generate_script_btn = gr.Button(
-                            "Write Script with AI", variant="primary",
-                            size="lg",
-                            elem_classes="script-cta",
-                        )
-                        script_gen_status = gr.Textbox(
-                            value="", label="", container=False,
-                            interactive=False, scale=3,
-                        )
+                    script_gen_status = gr.Textbox(
+                        value="", label="", container=False,
+                        interactive=False, scale=3,
+                    )
 
                 # ---- EXAMPLE PILLS ----
                 example_names = [
