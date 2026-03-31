@@ -334,7 +334,7 @@ def create_demo_interface():
                     "Game Dev Meeting", "Product Review",
                 ]
                 with gr.Row():
-                    gr.Markdown("**Examples:**", scale=0, min_width=80)
+                    gr.HTML("<span style='font-weight:600; white-space:nowrap; padding-top:8px;'>Examples:</span>")
                     example_buttons = []
                     for name in example_names:
                         btn = gr.Button(name, size="sm", variant="secondary",
