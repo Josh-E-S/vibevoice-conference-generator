@@ -68,7 +68,6 @@ EXAMPLE_SCRIPTS, EXAMPLE_SCRIPTS_NATURAL = load_example_scripts()
 # --- Script parsing helpers ---
 
 def parse_script_to_turns(script_text: str) -> list[dict]:
-    """Parse a 'Speaker N: text' script into a list of turn dicts."""
     turns = []
     if not script_text or not script_text.strip():
         return turns
@@ -98,7 +97,6 @@ def parse_script_to_turns(script_text: str) -> list[dict]:
 
 
 def turns_to_script(turns: list[dict]) -> str:
-    """Convert turn dicts back to 'Speaker N: text' format."""
     lines = []
     for t in turns:
         if t.get("text", "").strip():
@@ -107,7 +105,6 @@ def turns_to_script(turns: list[dict]) -> str:
 
 
 def estimate_duration(turns: list[dict]) -> str:
-    """Estimate audio duration from total word count."""
     total_words = sum(len(t.get("text", "").split()) for t in turns)
     if total_words == 0:
         return ""
@@ -145,7 +142,6 @@ FORMAT RULES:
 
 
 def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int]:
-    """Call the HF Inference API to generate a script. Returns (turns, num_speakers)."""
     system = SCRIPT_SYSTEM_PROMPT.format(max_words=SCRIPT_MAX_WORDS)
     response = llm_client.chat_completion(
         messages=[
@@ -157,7 +153,6 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int]:
     )
     raw = response.choices[0].message.content
     turns = parse_script_to_turns(raw)
-    # Enforce limits on AI output
     turns = turns[:MAX_TURNS]
     total_words = sum(len(t["text"].split()) for t in turns)
     while total_words > MAX_SCRIPT_WORDS and turns:
@@ -188,7 +183,6 @@ theme = gr.themes.Ocean(
 ).set(button_large_radius="*radius_sm")
 
 SPEAKER_COLORS = ["#6366f1", "#ec4899", "#22c55e", "#f59e0b"]
-SPEAKER_LABELS = ["Speaker 1", "Speaker 2", "Speaker 3", "Speaker 4"]
 
 CUSTOM_CSS = """
 /* ---- Conversation scroll container ---- */
@@ -216,15 +210,7 @@ CUSTOM_CSS = """
     background: {c}08 !important;
 }}""" for i, c in enumerate(SPEAKER_COLORS)) + """
 
-/* ---- Prompt bar ---- */
-.prompt-bar {
-    border: 1px solid var(--border-color-primary);
-    border-radius: 12px;
-    padding: 16px;
-    background: var(--background-fill-secondary);
-}
-
-/* ---- Voice chips row ---- */
+/* ---- Voice settings row ---- */
 .voice-row {
     border: 1px solid var(--border-color-primary);
     border-radius: 10px;
@@ -238,24 +224,23 @@ CUSTOM_CSS = """
     font-size: 0.85em !important;
 }
 
-/* ---- CTA buttons — consistent styling ---- */
-.script-cta button, .generate-cta button {
+/* ---- CTA buttons ---- */
+.cta-btn button {
     border-radius: 10px !important;
+    font-size: 1.1em !important;
+    padding: 14px 24px !important;
     letter-spacing: 0.02em;
-    background: var(--button-primary-background-fill) !important;
-    color: var(--button-primary-text-color) !important;
-    border: none !important;
-}
-.script-cta button {
-    font-size: 1.05em !important;
-    padding: 12px 24px !important;
-}
-.generate-cta button {
-    font-size: 1.15em !important;
-    padding: 16px !important;
 }
 
-/* ---- Sticky empty state ---- */
+/* ---- Status text (inline, no chrome) ---- */
+.status-text {
+    font-style: italic;
+    opacity: 0.8;
+    padding: 8px 0;
+    min-height: 0 !important;
+}
+
+/* ---- Empty state ---- */
 .empty-state {
     text-align: center;
     padding: 48px 20px !important;
@@ -327,11 +312,10 @@ def create_demo_interface():
             # ==================== GENERATE TAB ====================
             with gr.Tab("Generate"):
 
-                # ---- PROMPT BAR ----
+                # ---- STEP 1: DESCRIBE ----
                 gr.HTML("""
-                <p style="margin:0 0 8px 0; opacity:0.7; font-size:0.95em;">
-                    Describe any scenario — two people, a panel, a debate — and AI will write the full script.
-                    Then review, edit, assign voices, and generate audio.
+                <p style="margin:0 0 4px 0; opacity:0.65; font-size:0.9em;">
+                    Describe any scenario and AI writes the script. Then edit, assign voices, and generate audio.
                 </p>
                 """)
                 script_prompt = gr.Textbox(
@@ -340,18 +324,13 @@ def create_demo_interface():
                     lines=2,
                     max_lines=3,
                 )
-                with gr.Row():
-                    generate_script_btn = gr.Button(
-                        "Write Script with AI", variant="primary",
-                        size="lg",
-                        elem_classes="script-cta",
-                    )
-                    script_gen_status = gr.Textbox(
-                        value="", label="", container=False,
-                        interactive=False, scale=3,
-                    )
+                generate_script_btn = gr.Button(
+                    "Write Script with AI", variant="primary",
+                    size="lg", elem_classes="cta-btn",
+                )
+                script_gen_status = gr.HTML(value="", elem_classes="status-text")
 
-                # ---- EXAMPLE PILLS ----
+                # ---- EXAMPLES ----
                 example_names = [
                     "AI TED Talk", "Political Speech",
                     "Finance IPO", "Telehealth",
@@ -359,17 +338,16 @@ def create_demo_interface():
                     "Game Dev Meeting", "Product Review",
                 ]
                 with gr.Row():
-                    gr.HTML("<span style='font-weight:600; white-space:nowrap; padding-top:8px;'>Examples:</span>")
                     example_buttons = []
                     for name in example_names:
                         btn = gr.Button(name, size="sm", variant="secondary",
                                         elem_classes="example-btn", min_width=80)
                         example_buttons.append(btn)
 
-                # ---- CONVERSATION EDITOR ----
+                # ---- STEP 2: SCRIPT EDITOR ----
                 with gr.Row():
-                    gr.Markdown("### Script")
-                    duration_display = gr.Markdown(value="")
+                    gr.HTML("<h3 style='margin:0'>Script</h3>")
+                    duration_display = gr.HTML(value="")
 
                 with gr.Column(elem_classes="conversation-scroll"):
                     @gr.render(inputs=[turns_state, gr.State(4)])
@@ -383,7 +361,6 @@ def create_demo_interface():
                             )
                             return
 
-                        # Detect how many speakers are in the current script
                         n_speakers = max(t["speaker"] for t in turns) if turns else 1
                         speaker_choices = [f"Speaker {i+1}" for i in range(max(n_speakers, 1))]
 
@@ -437,17 +414,11 @@ def create_demo_interface():
                             del_btn.click(fn=on_delete, inputs=[turns_state],
                                           outputs=[turns_state])
 
-                with gr.Row():
-                    gr.HTML("<div></div>")  # spacer
-                    add_turn_btn = gr.Button("+ Add Turn", size="sm", variant="secondary",
-                                             scale=0, min_width=120)
-                    gr.HTML("<div></div>")  # spacer
+                add_turn_btn = gr.Button("+ Add Turn", size="sm", variant="secondary")
 
-                # ---- VOICE & MODEL SETTINGS ----
-                # Hidden slider that gets auto-set — not shown to user
+                # ---- STEP 3: VOICE & MODEL ----
                 num_speakers = gr.Slider(
-                    minimum=1, maximum=4, value=2, step=1,
-                    visible=False,
+                    minimum=1, maximum=4, value=2, step=1, visible=False,
                 )
 
                 with gr.Group(elem_classes="voice-row"):
@@ -472,13 +443,12 @@ def create_demo_interface():
                         cfg_scale = gr.Slider(
                             minimum=1.0, maximum=2.0, value=1.3, step=0.05,
                             label="CFG Scale",
-                            scale=3,
                         )
 
-                # ---- GENERATE BUTTON ----
+                # ---- STEP 4: GENERATE ----
                 generate_btn = gr.Button(
                     "Generate Conference Audio", size="lg", variant="primary",
-                    elem_classes="generate-cta",
+                    elem_classes="cta-btn",
                 )
 
                 # ---- OUTPUT ----
@@ -505,7 +475,6 @@ def create_demo_interface():
                     outputs=speaker_selections,
                 )
 
-                # --- Add turn ---
                 def add_turn(turns):
                     if len(turns) >= MAX_TURNS:
                         gr.Warning(f"Maximum {MAX_TURNS} turns reached.")
@@ -533,8 +502,8 @@ def create_demo_interface():
                 )
 
                 # --- AI Script Generation ---
-                def _no_change(status_text):
-                    return (gr.update(), gr.update(), status_text,
+                def _no_change(status_html):
+                    return (gr.update(), gr.update(), status_html,
                             gr.update(), *[gr.update()] * 4)
 
                 def on_generate_script(prompt):
@@ -543,12 +512,12 @@ def create_demo_interface():
                         yield _no_change("")
                         return
 
-                    yield _no_change("*Writing script...*")
+                    yield _no_change("<em>Writing script...</em>")
 
                     try:
                         turns, detected = generate_script_from_prompt(prompt.strip())
                         if not turns:
-                            yield _no_change("Empty result — try a more descriptive prompt.")
+                            yield _no_change("<em>Empty result — try a more descriptive prompt.</em>")
                             return
 
                         voices = list(AVAILABLE_VOICES[:detected])
@@ -562,9 +531,9 @@ def create_demo_interface():
                         traceback.print_exc()
                         msg = str(e)
                         if "api_key" in msg or "log in" in msg or "token" in msg.lower():
-                            yield _no_change("HF_TOKEN not configured. Add it in Space Settings → Secrets.")
+                            yield _no_change("<em>HF_TOKEN not configured. Add it in Space Settings.</em>")
                         else:
-                            yield _no_change(f"Error: {msg}")
+                            yield _no_change(f"<em>Error: {msg[:200]}</em>")
 
                 generate_script_btn.click(
                     fn=on_generate_script,
@@ -573,7 +542,7 @@ def create_demo_interface():
                              num_speakers] + speaker_selections,
                 )
 
-                # --- Load examples (always use natural versions) ---
+                # --- Load examples ---
                 def load_example(idx):
                     if idx >= len(EXAMPLE_SCRIPTS):
                         return [], 2, "", *[None] * 4
