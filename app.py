@@ -238,11 +238,16 @@ CUSTOM_CSS = """
     font-size: 0.85em !important;
 }
 
-/* ---- Generate CTA ---- */
+/* ---- CTA buttons ---- */
+.generate-cta button, .script-cta button {
+    font-size: 1.05em !important;
+    padding: 12px 24px !important;
+    letter-spacing: 0.02em;
+    border-radius: 10px !important;
+}
 .generate-cta button {
     font-size: 1.1em !important;
     padding: 14px !important;
-    letter-spacing: 0.02em;
 }
 
 /* ---- Sticky empty state ---- */
@@ -334,8 +339,8 @@ def create_demo_interface():
                     with gr.Row():
                         generate_script_btn = gr.Button(
                             "Write Script with AI", variant="primary",
-                            scale=0, min_width=200,
-                            elem_classes="generate-cta",
+                            size="lg",
+                            elem_classes="script-cta",
                         )
                         script_gen_status = gr.Textbox(
                             value="", label="", container=False,
