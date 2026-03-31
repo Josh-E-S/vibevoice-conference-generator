@@ -30,6 +30,14 @@ image = (
         "librosa",
         "pydub",
     )
+    .run_commands(
+        "mkdir -p /root/vibevoice",
+        "touch /root/vibevoice/__init__.py",
+        "ln -s /root/modular /root/vibevoice/modular",
+        "ln -s /root/processor /root/vibevoice/processor",
+        "ln -s /root/voices /root/vibevoice/voices",
+        "ln -s /root/schedule /root/vibevoice/schedule"
+    )
     .add_local_dir("backend_modal/modular", remote_path="/root/modular")
     .add_local_dir("backend_modal/processor", remote_path="/root/processor")
     .add_local_dir("backend_modal/voices", remote_path="/root/voices")
@@ -51,7 +59,9 @@ cache_volume = modal.Volume.from_name("vibevoice-cache", create_if_missing=True)
     volumes={"/cache": cache_volume}
 )
 class VibeVoiceModel:
-    def __init__(self):
+    @modal.enter()
+    def load_models(self):
+        """Run once when the container starts. Loads both models to GPU."""
         self.model_paths = {
             "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B",
             "VibeVoice-7B": "vibevoice/VibeVoice-7B",
@@ -61,17 +71,11 @@ class VibeVoiceModel:
         self.cache_dir = "/cache"
         self.max_cache_size_gb = 10  # Limit cache to 10GB
 
-    @modal.enter()
-    def load_models(self):
-        """
-        This method is run once when the container starts.
-        With A10G (24GB), we can load both models to GPU.
-        """
         # Project-specific imports are moved here to run inside the container
         from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
         from processor.vibevoice_processor import VibeVoiceProcessor
 
-        print("Entering container and loading models to GPU (A10G with 24GB)...")
+        print("Entering container and loading models to GPU...")
         
         # Set compiler flags for better performance
         if torch.cuda.is_available() and hasattr(torch, '_inductor'):
@@ -104,11 +108,9 @@ class VibeVoiceModel:
         
         self.setup_voice_presets()
         print("Model loading complete.")
-    
+
     def _place_model(self, target_name: str):
-        """
-        With A10G, both models stay on GPU. Just update the current model.
-        """
+        """Both models stay on GPU. Just update the active selection."""
         self.current_model_name = target_name
         print(f"Switched to model {target_name}")
 
@@ -297,7 +299,6 @@ class VibeVoiceModel:
             if model_name not in self.models:
                 raise ValueError(f"Unknown model: {model_name}")
 
-            # Initialize log scaffold
             selected_speakers = [speaker_1, speaker_2, speaker_3, speaker_4][:num_speakers]
             log_lines = [
                 f"Generating conference with {num_speakers} speakers",
@@ -307,7 +308,20 @@ class VibeVoiceModel:
             ]
             log_text = "\n".join(log_lines)
 
-            # Emit initial status before heavy work kicks in
+            # Check cache first
+            cache_key = self._generate_cache_key(script, model_name, selected_speakers, cfg_scale)
+            cached_audio, cached_sr = self._get_cached_audio(cache_key)
+            if cached_audio is not None:
+                log_lines.append("Cache hit! Returning previously generated audio.")
+                log_text = "\n".join(log_lines)
+                yield self._emit_progress(
+                    stage="complete", pct=100,
+                    status="Loaded from cache.",
+                    log_text=log_text,
+                    audio=(cached_sr, cached_audio), done=True,
+                )
+                return
+
             yield self._emit_progress(
                 stage="queued",
                 pct=5,
@@ -475,10 +489,11 @@ class VibeVoiceModel:
             sample_rate = 24000
             total_duration = len(audio) / sample_rate
             log_lines.append(f"Audio duration: {total_duration:.2f} seconds")
+
+            self._save_to_cache(cache_key, audio, sample_rate)
             log_lines.append("Complete!")
             log_text = "\n".join(log_lines)
 
-            # Final yield with both audio and complete log
             yield self._emit_progress(
                 stage="complete",
                 pct=100,
