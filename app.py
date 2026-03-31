@@ -123,18 +123,22 @@ else:
     print(f"HF_TOKEN loaded ({len(hf_token)} chars)")
 llm_client = InferenceClient(model=SCRIPT_GEN_MODEL, token=hf_token)
 
-SCRIPT_SYSTEM_PROMPT = """You are a script writer. Write a realistic, engaging conversation script.
+SCRIPT_SYSTEM_PROMPT = """You are an expert script writer for spoken audio. Write a conversation that sounds like real people talking.
 
-RULES:
-- Use EXACTLY this format for every line: "Speaker N: dialogue text"
-- N must be a number starting from 1
-- Each speaker turn is its own paragraph separated by a blank line
-- Write natural, flowing dialogue — not robotic or overly formal
-- Include character names and context naturally in the dialogue
+STYLE:
+- Each speaker should talk for a FULL PARAGRAPH per turn — 3 to 8 sentences minimum
+- Speakers share complete thoughts, explain their reasoning, give examples, and build arguments before the other person responds
+- This is NOT a rapid-fire back-and-forth. It should feel like a real meeting, interview, or deep conversation where people take time to make their point
+- Use natural speech patterns: filler words (um, uh, well, you know), false starts, self-corrections, and thinking pauses
+- Speakers should reference what the other person said, react naturally, and build on previous points
+- Include personality — people joke, digress slightly, use analogies, get passionate about topics
+
+FORMAT RULES:
+- Use EXACTLY this format: "Speaker N: dialogue text" where N is 1 through {num_speakers}
+- Each turn is separated by a blank line
+- Use EXACTLY {num_speakers} speakers
 - Keep the total script under {max_words} words
-- Use EXACTLY {num_speakers} speakers (Speaker 1 through Speaker {num_speakers})
-- Do NOT include stage directions, parentheticals, or anything other than dialogue
-- Output ONLY the script, no preamble or commentary"""
+- Output ONLY the script — no stage directions, no commentary, no preamble"""
 
 
 def generate_script_from_prompt(prompt: str, num_speakers: int) -> list[dict]:
