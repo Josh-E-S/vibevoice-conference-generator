@@ -13,7 +13,7 @@ AVAILABLE_MODELS = ["VibeVoice-1.5B", "VibeVoice-7B"]
 AVAILABLE_VOICES = ["Cherry", "Chicago", "Janus", "Mantis", "Sponge", "Starchild"]
 DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
 
-SCRIPT_GEN_MODEL = "mistralai/Mistral-Small-24B-Instruct-2501"
+SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 SCRIPT_MAX_WORDS = 1000
 
 # --- Load example scripts ---
@@ -117,6 +117,10 @@ def estimate_duration(turns: list[dict]) -> str:
 # --- AI Script Generation ---
 
 hf_token = os.environ.get("HF_TOKEN")
+if not hf_token:
+    print("WARNING: HF_TOKEN not set. Script generation will fail.")
+else:
+    print(f"HF_TOKEN loaded ({len(hf_token)} chars)")
 llm_client = InferenceClient(model=SCRIPT_GEN_MODEL, token=hf_token)
 
 SCRIPT_SYSTEM_PROMPT = """You are a script writer. Write a realistic, engaging conversation script.
@@ -447,7 +451,12 @@ def create_demo_interface():
                             return gr.update(), gr.update()
                         return turns, estimate_duration(turns)
                     except Exception as e:
-                        gr.Warning(f"Script generation failed: {e}")
+                        print(f"Script generation error: {e}")
+                        msg = str(e)
+                        if "api_key" in msg or "log in" in msg:
+                            gr.Warning("HF_TOKEN secret not configured. Add it in Space Settings → Secrets.")
+                        else:
+                            gr.Warning(f"Script generation failed: {e}")
                         return gr.update(), gr.update()
 
                 generate_script_btn.click(
