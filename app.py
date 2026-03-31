@@ -14,7 +14,9 @@ AVAILABLE_VOICES = ["Cherry", "Chicago", "Janus", "Mantis", "Sponge", "Starchild
 DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
 
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
-SCRIPT_MAX_WORDS = 1000
+SCRIPT_MAX_WORDS = 1000           # AI generation cap
+MAX_SCRIPT_WORDS = 1500           # Hard limit for audio generation (~10 min)
+MAX_TURNS = 50                    # Max conversation turns
 
 
 # --- Load example scripts ---
@@ -155,6 +157,12 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int]:
     )
     raw = response.choices[0].message.content
     turns = parse_script_to_turns(raw)
+    # Enforce limits on AI output
+    turns = turns[:MAX_TURNS]
+    total_words = sum(len(t["text"].split()) for t in turns)
+    while total_words > MAX_SCRIPT_WORDS and turns:
+        turns.pop()
+        total_words = sum(len(t["text"].split()) for t in turns)
     speaker_ids = {t["speaker"] for t in turns}
     num_speakers = max(min(len(speaker_ids), 4), 1) if speaker_ids else 1
     return turns, num_speakers
@@ -311,6 +319,12 @@ def create_demo_interface():
 
                 # ---- PROMPT BAR ----
                 with gr.Group(elem_classes="prompt-bar"):
+                    gr.HTML("""
+                    <p style="margin:0 0 8px 0; opacity:0.8; font-size:0.95em;">
+                        Describe any scenario — two people, a panel, a debate — and AI will write the full script.
+                        Then review, edit, assign voices, and generate audio.
+                    </p>
+                    """)
                     script_prompt = gr.Textbox(
                         label="Describe your conversation",
                         placeholder="A wizard and an orc debating battle strategy before a siege...",
@@ -319,7 +333,9 @@ def create_demo_interface():
                     )
                     with gr.Row():
                         generate_script_btn = gr.Button(
-                            "Write Script with AI", variant="secondary", scale=0, min_width=200,
+                            "Write Script with AI", variant="primary",
+                            scale=0, min_width=200,
+                            elem_classes="generate-cta",
                         )
                         script_gen_status = gr.Textbox(
                             value="", label="", container=False,
@@ -478,6 +494,9 @@ def create_demo_interface():
 
                 # --- Add turn ---
                 def add_turn(turns):
+                    if len(turns) >= MAX_TURNS:
+                        gr.Warning(f"Maximum {MAX_TURNS} turns reached.")
+                        return turns, estimate_duration(turns)
                     if not turns:
                         next_speaker = 1
                     else:
@@ -582,6 +601,17 @@ def create_demo_interface():
                             build_primary_status("error", "No script to generate."),
                             gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
                             "Add dialogue before generating.",
+                        )
+                        return
+
+                    word_count = len(script.split())
+                    if word_count > MAX_SCRIPT_WORDS:
+                        yield (
+                            build_primary_status("error",
+                                f"Script too long: {word_count} words (max {MAX_SCRIPT_WORDS}). "
+                                "Shorten some turns to keep generation costs reasonable."),
+                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
+                            f"Script has {word_count} words, max is {MAX_SCRIPT_WORDS}.",
                         )
                         return
 
