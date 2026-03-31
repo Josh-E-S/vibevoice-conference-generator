@@ -319,9 +319,12 @@ def create_demo_interface():
                     )
                     with gr.Row():
                         generate_script_btn = gr.Button(
-                            "Write Script with AI", variant="secondary", scale=2,
+                            "Write Script with AI", variant="secondary", scale=0, min_width=200,
                         )
-                        script_gen_status = gr.Markdown(value="", scale=3)
+                        script_gen_status = gr.Textbox(
+                            value="", label="", container=False,
+                            interactive=False, scale=3,
+                        )
 
                 # ---- EXAMPLE PILLS ----
                 example_names = [
