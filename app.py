@@ -279,7 +279,7 @@ def create_demo_interface():
                                 generate_script_btn = gr.Button(
                                     "Generate Script", variant="secondary",
                                 )
-                                script_gen_status = gr.Markdown(value="", visible=False)
+                                script_gen_status = gr.Markdown(value="")
 
                         # --- Example buttons ---
                         with gr.Accordion("Example Scripts", open=False):
@@ -443,26 +443,31 @@ def create_demo_interface():
                 def on_generate_script(prompt, n_speakers):
                     if not prompt or not prompt.strip():
                         gr.Warning("Please enter a prompt describing the conversation.")
-                        return gr.update(), gr.update()
+                        yield gr.update(), gr.update(), ""
+                        return
+
+                    yield gr.update(), gr.update(), "*Generating script...*"
+
                     try:
                         turns = generate_script_from_prompt(prompt.strip(), int(n_speakers))
                         if not turns:
-                            gr.Warning("The AI returned an empty script. Try a more descriptive prompt.")
-                            return gr.update(), gr.update()
-                        return turns, estimate_duration(turns)
+                            yield gr.update(), gr.update(), "No script returned. Try a more descriptive prompt."
+                            return
+                        yield turns, estimate_duration(turns), ""
                     except Exception as e:
                         print(f"Script generation error: {e}")
+                        import traceback as tb
+                        tb.print_exc()
                         msg = str(e)
-                        if "api_key" in msg or "log in" in msg:
-                            gr.Warning("HF_TOKEN secret not configured. Add it in Space Settings → Secrets.")
+                        if "api_key" in msg or "log in" in msg or "token" in msg.lower():
+                            yield gr.update(), gr.update(), "HF_TOKEN secret not configured. Add it in Space Settings."
                         else:
-                            gr.Warning(f"Script generation failed: {e}")
-                        return gr.update(), gr.update()
+                            yield gr.update(), gr.update(), f"Error: {msg}"
 
                 generate_script_btn.click(
                     fn=on_generate_script,
                     inputs=[script_prompt, num_speakers],
-                    outputs=[turns_state, duration_display],
+                    outputs=[turns_state, duration_display, script_gen_status],
                 )
 
                 # --- Load example scripts ---
