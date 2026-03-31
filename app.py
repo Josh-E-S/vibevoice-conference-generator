@@ -334,7 +334,7 @@ def create_demo_interface():
                     "Game Dev Meeting", "Product Review",
                 ]
                 with gr.Row():
-                    use_natural = gr.Checkbox(value=True, label="Natural speech", scale=0, min_width=140)
+                    gr.Markdown("**Examples:**", scale=0, min_width=80)
                     example_buttons = []
                     for name in example_names:
                         btn = gr.Button(name, size="sm", variant="secondary",
@@ -541,12 +541,12 @@ def create_demo_interface():
                              num_speakers] + speaker_selections,
                 )
 
-                # --- Load examples ---
-                def load_example(idx, natural):
+                # --- Load examples (always use natural versions) ---
+                def load_example(idx):
                     if idx >= len(EXAMPLE_SCRIPTS):
                         return [], 2, "", *[None] * 4
 
-                    script = EXAMPLE_SCRIPTS_NATURAL[idx] if natural else EXAMPLE_SCRIPTS[idx]
+                    script = EXAMPLE_SCRIPTS_NATURAL[idx]
                     num = SCRIPT_SPEAKER_COUNTS[idx] if idx < len(SCRIPT_SPEAKER_COUNTS) else 1
                     turns = parse_script_to_turns(script)
 
@@ -558,8 +558,8 @@ def create_demo_interface():
 
                 for idx, btn in enumerate(example_buttons):
                     btn.click(
-                        fn=lambda nat, i=idx: load_example(i, nat),
-                        inputs=[use_natural],
+                        fn=lambda i=idx: load_example(i),
+                        inputs=[],
                         outputs=[turns_state, num_speakers, duration_display] + speaker_selections,
                         queue=False,
                     )
