@@ -186,6 +186,37 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str]:
     return turns, num_speakers, title
 
 
+PARODY_SYSTEM_PROMPT = """You are a comedian narrator. The user will give you a scenario. Write a SHORT, funny behind-the-scenes narration of what's "really" happening while their audio is being generated. Be absurd, self-aware, and poke fun at AI.
+
+RULES:
+- Write 15-25 short sentences, one per line
+- Each line should be its own complete funny thought or observation
+- Reference the user's scenario but make it ridiculous
+- Break the fourth wall — you know you're an AI generating audio
+- Mix in jokes about GPUs, neural networks, robots, etc.
+- Keep it PG and lighthearted
+- Output ONLY the lines, no numbering, no quotes"""
+
+
+def generate_parody_story(prompt: str) -> list[str]:
+    """Generate a funny behind-the-scenes narration for the loading screen."""
+    try:
+        response = llm_client.chat_completion(
+            messages=[
+                {"role": "system", "content": PARODY_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1024,
+            temperature=0.9,
+        )
+        raw = response.choices[0].message.content
+        lines = [l.strip() for l in raw.strip().split("\n") if l.strip()]
+        return lines if lines else ["Generating your audio... hang tight!"]
+    except Exception as e:
+        print(f"Parody generation failed (non-critical): {e}")
+        return ["Generating your audio... hang tight!"]
+
+
 # --- Modal Connection ---
 try:
     RemoteVibeVoiceModel = modal.Cls.from_name(MODAL_STUB_NAME, MODAL_CLASS_NAME)
@@ -383,6 +414,7 @@ def create_demo_interface():
         # --- State ---
         turns_state = gr.State([])
         script_title_state = gr.State("")
+        parody_lines_state = gr.State([])  # funny loading story for audio generation
 
         # ---- BANNER ----
         gr.HTML("""
@@ -601,18 +633,52 @@ def create_demo_interface():
                 SCRIPT_GEN_MESSAGES = [
                     "Writing script...",
                     "Still generating...",
-                    "Making magic...",
+                    "Making magic happen...",
                     "Bossing around robot writers...",
                     "Entering the matrix...",
                     "Crafting dialogue...",
-                    "Almost there...",
+                    "Teaching AI to be dramatic...",
+                    "Consulting the creative robots...",
+                    "Spilling digital ink...",
+                    "Herding AI cats into a script...",
+                    "Negotiating with the muse...",
+                    "Downloading inspiration...",
+                    "Warming up the plot engine...",
+                    "Shaking the idea tree...",
+                    "Feeding the word machine...",
+                    "Polishing virtual microphones...",
+                    "Rehearsing in the AI green room...",
+                    "Bribing the creativity daemon...",
+                    "Untangling narrative spaghetti...",
+                    "Summoning fictional characters...",
+                    "Tuning the dialogue generator...",
+                    "Spinning up the story factory...",
+                    "Convincing electrons to be eloquent...",
+                    "Wrangling syllables into sentences...",
+                    "Asking the AI to use its inside voice...",
+                    "Loading dramatic tension...",
+                    "Calibrating the sass levels...",
+                    "Assembling words in the right order...",
+                    "Generating witty banter...",
+                    "Overthinking your prompt (in a good way)...",
+                    "Running it by the robot editor...",
+                    "Adding a pinch of personality...",
+                    "Almost done, probably...",
+                    "Spell-checking the AI's homework...",
+                    "Giving characters their motivation...",
+                    "Practicing dramatic pauses...",
+                    "Reticulating splines (just kidding)...",
+                    "The AI is in the zone...",
+                    "Finalizing the masterpiece...",
+                    "One more revision, we promise...",
                 ]
 
-                # outputs: turns, duration, status, title, audio, script_btn, gen_btn, num_speakers, *4 voices
+                # outputs: turns, duration, status, title, audio, script_btn, gen_btn, parody, num_speakers, *4 voices
                 def _script_no_change(status_html):
                     return (gr.update(), gr.update(), status_html,
                             gr.update(), gr.update(),
                             gr.update(), gr.update(),
+                            gr.update(),
                             gr.update(), *[gr.update()] * 4)
 
                 def _script_buttons_busy(status_html):
@@ -620,6 +686,7 @@ def create_demo_interface():
                             gr.update(), gr.update(),
                             gr.update(interactive=False, value="Writing..."),
                             gr.update(interactive=False),
+                            gr.update(),
                             gr.update(), *[gr.update()] * 4)
 
                 def _script_buttons_ready(status_html=""):
@@ -627,6 +694,7 @@ def create_demo_interface():
                             gr.update(), gr.update(),
                             gr.update(interactive=True, value="Write Script with AI"),
                             gr.update(interactive=True),
+                            gr.update(),
                             gr.update(), *[gr.update()] * 4)
 
                 def _make_title_html(title):
@@ -643,9 +711,10 @@ def create_demo_interface():
                     # Disable both buttons
                     yield _script_buttons_busy(f"<em>{SCRIPT_GEN_MESSAGES[0]}</em>")
 
-                    # Run generation in a thread so we can yield rotating messages
+                    # Run script + parody generation in threads
                     result = {}
                     error = {}
+                    parody_result = {"lines": []}
 
                     def _run():
                         try:
@@ -653,8 +722,13 @@ def create_demo_interface():
                         except Exception as e:
                             error["err"] = e
 
+                    def _run_parody():
+                        parody_result["lines"] = generate_parody_story(prompt.strip())
+
                     thread = _threading.Thread(target=_run, daemon=True)
+                    parody_thread = _threading.Thread(target=_run_parody, daemon=True)
                     thread.start()
+                    parody_thread.start()
 
                     msg_idx = 1
                     while thread.is_alive():
@@ -664,6 +738,7 @@ def create_demo_interface():
                         yield _script_buttons_busy(f"<em>{msg}</em>")
 
                     thread.join()
+                    parody_thread.join()
 
                     if "err" in error:
                         e = error["err"]
@@ -691,6 +766,7 @@ def create_demo_interface():
                            gr.update(label=audio_label),
                            gr.update(interactive=True, value="Write Script with AI"),
                            gr.update(interactive=True),
+                           parody_result["lines"],
                            detected, *voices[:4])
 
                 generate_script_btn.click(
@@ -699,6 +775,7 @@ def create_demo_interface():
                     outputs=[turns_state, duration_display, script_gen_status,
                              script_title_display, complete_audio_output,
                              generate_script_btn, generate_btn,
+                             parody_lines_state,
                              num_speakers] + speaker_selections,
                 )
 
@@ -741,10 +818,19 @@ def create_demo_interface():
                     )
 
                 def generate_podcast_wrapper(
-                    model_choice, num_speakers_val, turns, *speakers_and_params
+                    model_choice, num_speakers_val, turns, parody_lines, *speakers_and_params
                 ):
                     BTN_BUSY = "Generating..."
                     BTN_READY = "Generate Conference Audio"
+
+                    # Set up parody line cycling
+                    parody_idx = [0]  # mutable counter
+                    def _next_parody():
+                        if not parody_lines:
+                            return None
+                        line = parody_lines[parody_idx[0] % len(parody_lines)]
+                        parody_idx[0] += 1
+                        return line
 
                     if remote_generate_function is None:
                         yield _gen_yield(
@@ -774,9 +860,10 @@ def create_demo_interface():
                         )
                         return
 
-                    # Disable button, show connecting status
+                    # Disable buttons, show connecting status
+                    first_line = _next_parody() or "Provisioning GPU resources..."
                     yield _gen_yield(
-                        build_status_html("connecting", "Provisioning GPU resources..."),
+                        build_status_html("connecting", first_line),
                         BTN_BUSY, False,
                         gr.update(label=AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)),
                         "Requesting GPU on Modal.com...",
@@ -817,8 +904,14 @@ def create_demo_interface():
                                 if audio_payload is not None:
                                     audio_update = gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT)
 
+                                # Use parody line for active stages, real status for done
+                                if is_done:
+                                    display_line = status_line
+                                else:
+                                    display_line = _next_parody() or status_line
+
                                 yield _gen_yield(
-                                    build_status_html(stage_key, status_line),
+                                    build_status_html(stage_key, display_line),
                                     BTN_READY if is_done else BTN_BUSY,
                                     is_done,
                                     audio_update,
@@ -839,9 +932,10 @@ def create_demo_interface():
                                         current_log,
                                     )
                                 else:
-                                    status_line = current_log.splitlines()[-1] if current_log else "Processing..."
+                                    display_line = _next_parody() or (
+                                        current_log.splitlines()[-1] if current_log else "Processing...")
                                     yield _gen_yield(
-                                        build_status_html("generating_audio", status_line),
+                                        build_status_html("generating_audio", display_line),
                                         BTN_BUSY, False,
                                         gr.update(), current_log,
                                     )
@@ -856,7 +950,7 @@ def create_demo_interface():
 
                 generate_btn.click(
                     fn=generate_podcast_wrapper,
-                    inputs=[model_dropdown, num_speakers, turns_state] + speaker_selections + [cfg_scale],
+                    inputs=[model_dropdown, num_speakers, turns_state, parody_lines_state] + speaker_selections + [cfg_scale],
                     outputs=[primary_status, generate_btn, generate_script_btn, complete_audio_output, log_output],
                 )
 
