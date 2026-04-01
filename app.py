@@ -134,14 +134,17 @@ STYLE:
 - Include personality — people joke, digress slightly, use analogies, get passionate about topics
 
 FORMAT RULES:
-- Use EXACTLY this format: "Speaker N: dialogue text" where N starts at 1
+- Start with a title on the FIRST LINE in this format: "Title: Your Script Title Here"
+- Then a blank line, then the dialogue
+- Use EXACTLY this format for dialogue: "Speaker N: dialogue text" where N starts at 1
 - Each turn is separated by a blank line
 - Choose the right number of speakers for the scenario (1 to 4 max)
 - Keep the total script under {max_words} words
-- Output ONLY the script — no stage directions, no commentary, no preamble"""
+- Output ONLY the title and script — no stage directions, no commentary, no preamble"""
 
 
-def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int]:
+def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str]:
+    """Returns (turns, num_speakers, title)."""
     system = SCRIPT_SYSTEM_PROMPT.format(max_words=SCRIPT_MAX_WORDS)
     response = llm_client.chat_completion(
         messages=[
@@ -152,6 +155,14 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int]:
         temperature=0.7,
     )
     raw = response.choices[0].message.content
+
+    # Extract title from first line if present
+    title = ""
+    lines = raw.strip().split("\n")
+    if lines and lines[0].lower().startswith("title:"):
+        title = lines[0].split(":", 1)[1].strip()
+        raw = "\n".join(lines[1:])
+
     turns = parse_script_to_turns(raw)
     turns = turns[:MAX_TURNS]
     total_words = sum(len(t["text"].split()) for t in turns)
@@ -160,7 +171,7 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int]:
         total_words = sum(len(t["text"].split()) for t in turns)
     speaker_ids = {t["speaker"] for t in turns}
     num_speakers = max(min(len(speaker_ids), 4), 1) if speaker_ids else 1
-    return turns, num_speakers
+    return turns, num_speakers, title
 
 
 # --- Modal Connection ---
@@ -246,6 +257,25 @@ CUSTOM_CSS = """
     padding: 48px 20px !important;
     opacity: 0.6;
 }
+
+/* ---- Generation status banner ---- */
+.gen-status {
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-top: 8px;
+    text-align: center;
+    font-size: 1.05em;
+    min-height: 0;
+}
+.gen-status-active {
+    background: var(--background-fill-secondary);
+    border: 1px solid var(--border-color-primary);
+    animation: pulse-border 2s ease-in-out infinite;
+}
+@keyframes pulse-border {
+    0%, 100% { border-color: var(--border-color-primary); }
+    50% { border-color: #6366f1; }
+}
 """
 
 
@@ -274,15 +304,31 @@ AUDIO_STAGE_LABELS = {
 }
 
 
-def build_primary_status(stage: str, status_line: str) -> str:
+def build_status_html(stage: str, status_line: str) -> str:
+    """Build an HTML status banner for the generation progress."""
     title, default_desc = PRIMARY_STAGE_MESSAGES.get(stage, ("Working", "Processing..."))
-    desc_parts = []
-    if default_desc:
-        desc_parts.append(default_desc)
-    if status_line and status_line not in desc_parts:
-        desc_parts.append(status_line)
-    desc = "\n\n".join(desc_parts) if desc_parts else status_line
-    return f"### {title}\n{desc}"
+    desc = status_line or default_desc or ""
+
+    if stage == "complete":
+        icon = "&#10003;"
+        color = "#22c55e"
+        cls = "gen-status"
+    elif stage == "error":
+        icon = "&#10007;"
+        color = "#ef4444"
+        cls = "gen-status"
+    else:
+        icon = "&#9679;"
+        color = "#6366f1"
+        cls = "gen-status gen-status-active"
+
+    return (
+        f'<div class="{cls}">'
+        f'<span style="color:{color}; font-size:1.3em; vertical-align:middle;">{icon}</span> '
+        f'<strong>{title}</strong>'
+        f'<br><span style="opacity:0.75; font-size:0.9em;">{desc}</span>'
+        f'</div>'
+    )
 
 
 # ========================================================
@@ -298,6 +344,7 @@ def create_demo_interface():
 
         # --- State ---
         turns_state = gr.State([])
+        script_title_state = gr.State("")
 
         # ---- BANNER ----
         gr.HTML("""
@@ -346,7 +393,7 @@ def create_demo_interface():
 
                 # ---- STEP 2: SCRIPT EDITOR ----
                 with gr.Row():
-                    gr.HTML("<h3 style='margin:0'>Script</h3>")
+                    script_title_display = gr.HTML(value="<h3 style='margin:0'>Script</h3>")
                     duration_display = gr.HTML(value="")
 
                 with gr.Column(elem_classes="conversation-scroll"):
@@ -441,7 +488,7 @@ def create_demo_interface():
                             speaker_selections.append(s)
                     with gr.Row():
                         cfg_scale = gr.Slider(
-                            minimum=1.0, maximum=2.0, value=1.3, step=0.05,
+                            minimum=1.0, maximum=2.0, value=2.0, step=0.05,
                             label="CFG Scale",
                         )
 
@@ -450,9 +497,9 @@ def create_demo_interface():
                     "Generate Conference Audio", size="lg", variant="primary",
                     elem_classes="cta-btn",
                 )
+                primary_status = gr.HTML(value="", elem_classes="gen-status")
 
                 # ---- OUTPUT ----
-                primary_status = gr.Markdown(value="", elem_id="primary-status")
                 complete_audio_output = gr.Audio(
                     label=AUDIO_LABEL_DEFAULT,
                     type="numpy",
@@ -502,9 +549,16 @@ def create_demo_interface():
                 )
 
                 # --- AI Script Generation ---
+                # outputs: turns, duration, status, title_display, audio_label, num_speakers, *4 voices
                 def _no_change(status_html):
                     return (gr.update(), gr.update(), status_html,
+                            gr.update(), gr.update(),
                             gr.update(), *[gr.update()] * 4)
+
+                def _make_title_html(title):
+                    if title:
+                        return f"<h3 style='margin:0'>{title}</h3>"
+                    return "<h3 style='margin:0'>Script</h3>"
 
                 def on_generate_script(prompt):
                     if not prompt or not prompt.strip():
@@ -515,7 +569,7 @@ def create_demo_interface():
                     yield _no_change("<em>Writing script...</em>")
 
                     try:
-                        turns, detected = generate_script_from_prompt(prompt.strip())
+                        turns, detected, title = generate_script_from_prompt(prompt.strip())
                         if not turns:
                             yield _no_change("<em>Empty result — try a more descriptive prompt.</em>")
                             return
@@ -524,7 +578,10 @@ def create_demo_interface():
                         while len(voices) < 4:
                             voices.append(None)
 
+                        audio_label = title if title else AUDIO_LABEL_DEFAULT
                         yield (turns, estimate_duration(turns), "",
+                               _make_title_html(title),
+                               gr.update(label=audio_label),
                                detected, *voices[:4])
                     except Exception as e:
                         print(f"Script generation error: {e}")
@@ -539,14 +596,16 @@ def create_demo_interface():
                     fn=on_generate_script,
                     inputs=[script_prompt],
                     outputs=[turns_state, duration_display, script_gen_status,
+                             script_title_display, complete_audio_output,
                              num_speakers] + speaker_selections,
                 )
 
                 # --- Load examples ---
                 def load_example(idx):
                     if idx >= len(EXAMPLE_SCRIPTS):
-                        return [], 2, "", *[None] * 4
+                        return [], 2, "", "<h3 style='margin:0'>Script</h3>", gr.update(), *[None] * 4
 
+                    title = example_names[idx]
                     script = EXAMPLE_SCRIPTS_NATURAL[idx]
                     num = SCRIPT_SPEAKER_COUNTS[idx] if idx < len(SCRIPT_SPEAKER_COUNTS) else 1
                     turns = parse_script_to_turns(script)
@@ -555,50 +614,68 @@ def create_demo_interface():
                     while len(voices) < 4:
                         voices.append(None)
 
-                    return turns, num, estimate_duration(turns), *voices[:4]
+                    return (turns, num, estimate_duration(turns),
+                            f"<h3 style='margin:0'>{title}</h3>",
+                            gr.update(label=title),
+                            *voices[:4])
 
                 for idx, btn in enumerate(example_buttons):
                     btn.click(
                         fn=lambda i=idx: load_example(i),
                         inputs=[],
-                        outputs=[turns_state, num_speakers, duration_display] + speaker_selections,
+                        outputs=[turns_state, num_speakers, duration_display,
+                                 script_title_display, complete_audio_output] + speaker_selections,
                         queue=False,
                     )
 
                 # --- Generate audio ---
+                def _gen_yield(status_html, btn_label, btn_interactive, audio_update, log_text):
+                    """Helper to yield consistent 5-tuple outputs."""
+                    return (
+                        status_html,
+                        gr.update(value=btn_label, interactive=btn_interactive),
+                        audio_update,
+                        log_text,
+                    )
+
                 def generate_podcast_wrapper(
                     model_choice, num_speakers_val, turns, *speakers_and_params
                 ):
+                    BTN_BUSY = "Generating..."
+                    BTN_READY = "Generate Conference Audio"
+
                     if remote_generate_function is None:
-                        yield (
-                            build_primary_status("error", "Modal backend is offline."),
-                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            "ERROR: Modal function not deployed.",
+                        yield _gen_yield(
+                            build_status_html("error", "Modal backend is offline."),
+                            BTN_READY, True,
+                            gr.update(), "ERROR: Modal function not deployed.",
                         )
                         return
 
                     script = turns_to_script(turns)
                     if not script.strip():
-                        yield (
-                            build_primary_status("error", "No script to generate."),
-                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            "Add dialogue before generating.",
+                        yield _gen_yield(
+                            build_status_html("error", "No script to generate."),
+                            BTN_READY, True,
+                            gr.update(), "Add dialogue before generating.",
                         )
                         return
 
                     word_count = len(script.split())
                     if word_count > MAX_SCRIPT_WORDS:
-                        yield (
-                            build_primary_status("error",
+                        yield _gen_yield(
+                            build_status_html("error",
                                 f"Script too long: {word_count} words (max {MAX_SCRIPT_WORDS}). "
-                                "Shorten some turns to keep generation costs reasonable."),
-                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            f"Script has {word_count} words, max is {MAX_SCRIPT_WORDS}.",
+                                "Shorten some turns."),
+                            BTN_READY, True,
+                            gr.update(), f"Script has {word_count} words, max is {MAX_SCRIPT_WORDS}.",
                         )
                         return
 
-                    yield (
-                        build_primary_status("connecting", "Provisioning GPU..."),
+                    # Disable button, show connecting status
+                    yield _gen_yield(
+                        build_status_html("connecting", "Provisioning GPU resources..."),
+                        BTN_BUSY, False,
                         gr.update(label=AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)),
                         "Requesting GPU on Modal.com...",
                     )
@@ -607,7 +684,6 @@ def create_demo_interface():
                         speakers = speakers_and_params[:4]
                         cfg_scale_val = speakers_and_params[4]
                         current_log = ""
-                        last_audio_label = AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)
                         last_stage = "connecting"
 
                         for update in remote_generate_function.remote_gen(
@@ -629,9 +705,9 @@ def create_demo_interface():
                                 status_line = update.get("status") or "Processing..."
                                 current_log = update.get("log", current_log)
 
-                                audio_label = AUDIO_STAGE_LABELS.get(stage_key)
-                                if not audio_label:
-                                    audio_label = f"Audio ({stage_key.replace('_',' ')})"
+                                audio_label = AUDIO_STAGE_LABELS.get(stage_key,
+                                    f"Audio ({stage_key.replace('_',' ')})")
+                                is_done = stage_key in ("complete", "error")
                                 if stage_key == "complete":
                                     audio_label = AUDIO_LABEL_DEFAULT
 
@@ -639,12 +715,13 @@ def create_demo_interface():
                                 if audio_payload is not None:
                                     audio_update = gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT)
 
-                                yield (
-                                    build_primary_status(stage_key, status_line),
+                                yield _gen_yield(
+                                    build_status_html(stage_key, status_line),
+                                    BTN_READY if is_done else BTN_BUSY,
+                                    is_done,
                                     audio_update,
                                     current_log,
                                 )
-                                last_audio_label = audio_label
                                 last_stage = stage_key
                             else:
                                 audio_payload, log_text = (
@@ -653,31 +730,32 @@ def create_demo_interface():
                                 if log_text:
                                     current_log = log_text
                                 if audio_payload is not None:
-                                    yield (
-                                        build_primary_status("complete", "Ready."),
+                                    yield _gen_yield(
+                                        build_status_html("complete", "Ready."),
+                                        BTN_READY, True,
                                         gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT),
                                         current_log,
                                     )
                                 else:
-                                    yield (
-                                        build_primary_status("generating_audio",
-                                            current_log.splitlines()[-1] if current_log else "Processing..."),
-                                        gr.update(label=AUDIO_STAGE_LABELS.get("generating_audio", last_audio_label)),
-                                        current_log,
+                                    status_line = current_log.splitlines()[-1] if current_log else "Processing..."
+                                    yield _gen_yield(
+                                        build_status_html("generating_audio", status_line),
+                                        BTN_BUSY, False,
+                                        gr.update(), current_log,
                                     )
                     except Exception as e:
                         tb = traceback.format_exc()
                         print(f"Error calling Modal: {e}")
-                        yield (
-                            build_primary_status("error", "Inference failed."),
-                            gr.update(label=AUDIO_STAGE_LABELS.get("error", AUDIO_LABEL_DEFAULT)),
-                            f"Error: {e}\n\n{tb}",
+                        yield _gen_yield(
+                            build_status_html("error", "Inference failed."),
+                            BTN_READY, True,
+                            gr.update(), f"Error: {e}\n\n{tb}",
                         )
 
                 generate_btn.click(
                     fn=generate_podcast_wrapper,
                     inputs=[model_dropdown, num_speakers, turns_state] + speaker_selections + [cfg_scale],
-                    outputs=[primary_status, complete_audio_output, log_output],
+                    outputs=[primary_status, generate_btn, complete_audio_output, log_output],
                 )
 
             # ==================== ARCHITECTURE TAB ====================
