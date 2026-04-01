@@ -446,19 +446,17 @@ def create_demo_interface():
                             )
                             return
 
-                        # Always show all 4 speakers so users can reassign
+                        # Show all 4 speakers with voice name + gender
                         speaker_choices = []
                         for i in range(4):
-                            voice_name = AVAILABLE_VOICES[i] if i < len(AVAILABLE_VOICES) else None
+                            voice_name = AVAILABLE_VOICES[i] if i < len(AVAILABLE_VOICES) else "?"
                             gender = VOICE_GENDERS.get(voice_name, "")
-                            tag = f" ({gender})" if gender else ""
-                            speaker_choices.append(f"Speaker {i+1}{tag}")
+                            speaker_choices.append(f"Speaker {i+1} - {voice_name} ({gender})")
 
                         for idx, turn in enumerate(turns):
                             spk_num = turn["speaker"]
                             color_class = f"speaker-{spk_num}" if 1 <= spk_num <= 4 else "speaker-1"
-                            # Find the matching choice for this speaker number
-                            spk_value = next((c for c in speaker_choices if c.startswith(f"Speaker {spk_num}")), f"Speaker {spk_num}")
+                            spk_value = speaker_choices[spk_num - 1] if 1 <= spk_num <= 4 else speaker_choices[0]
 
                             with gr.Row(key=f"turn-{idx}", elem_classes=color_class):
                                 spk_dd = gr.Dropdown(
@@ -492,9 +490,10 @@ def create_demo_interface():
 
                             def on_speaker_change(new_spk, current_turns, i=idx):
                                 if i < len(current_turns):
-                                    # Parse "Speaker 2 (M)" -> 2
-                                    num = int(re.match(r"Speaker (\d+)", new_spk).group(1))
-                                    current_turns[i]["speaker"] = num
+                                    # Parse "Speaker 2 - Chicago (M)" -> 2
+                                    m = re.match(r"Speaker (\d+)", new_spk)
+                                    if m:
+                                        current_turns[i]["speaker"] = int(m.group(1))
                                 return current_turns
 
                             spk_dd.change(fn=on_speaker_change, inputs=[spk_dd, turns_state],
@@ -596,10 +595,38 @@ def create_demo_interface():
                 )
 
                 # --- AI Script Generation ---
-                # outputs: turns, duration, status, title_display, audio_label, num_speakers, *4 voices
-                def _no_change(status_html):
+                import time as _time
+                import threading as _threading
+
+                SCRIPT_GEN_MESSAGES = [
+                    "Writing script...",
+                    "Still generating...",
+                    "Making magic...",
+                    "Bossing around robot writers...",
+                    "Entering the matrix...",
+                    "Crafting dialogue...",
+                    "Almost there...",
+                ]
+
+                # outputs: turns, duration, status, title, audio, script_btn, gen_btn, num_speakers, *4 voices
+                def _script_no_change(status_html):
                     return (gr.update(), gr.update(), status_html,
                             gr.update(), gr.update(),
+                            gr.update(), gr.update(),
+                            gr.update(), *[gr.update()] * 4)
+
+                def _script_buttons_busy(status_html):
+                    return (gr.update(), gr.update(), status_html,
+                            gr.update(), gr.update(),
+                            gr.update(interactive=False, value="Writing..."),
+                            gr.update(interactive=False),
+                            gr.update(), *[gr.update()] * 4)
+
+                def _script_buttons_ready(status_html=""):
+                    return (gr.update(), gr.update(), status_html,
+                            gr.update(), gr.update(),
+                            gr.update(interactive=True, value="Write Script with AI"),
+                            gr.update(interactive=True),
                             gr.update(), *[gr.update()] * 4)
 
                 def _make_title_html(title):
@@ -610,40 +637,68 @@ def create_demo_interface():
                 def on_generate_script(prompt):
                     if not prompt or not prompt.strip():
                         gr.Warning("Please enter a prompt.")
-                        yield _no_change("")
+                        yield _script_no_change("")
                         return
 
-                    yield _no_change("<em>Writing script...</em>")
+                    # Disable both buttons
+                    yield _script_buttons_busy(f"<em>{SCRIPT_GEN_MESSAGES[0]}</em>")
 
-                    try:
-                        turns, detected, title = generate_script_from_prompt(prompt.strip())
-                        if not turns:
-                            yield _no_change("<em>Empty result — try a more descriptive prompt.</em>")
-                            return
+                    # Run generation in a thread so we can yield rotating messages
+                    result = {}
+                    error = {}
 
-                        voices = list(VOICE_DISPLAY[:detected])
-                        while len(voices) < 4:
-                            voices.append(None)
+                    def _run():
+                        try:
+                            result["data"] = generate_script_from_prompt(prompt.strip())
+                        except Exception as e:
+                            error["err"] = e
 
-                        audio_label = title if title else AUDIO_LABEL_DEFAULT
-                        yield (turns, estimate_duration(turns), "",
-                               _make_title_html(title),
-                               gr.update(label=audio_label),
-                               detected, *voices[:4])
-                    except Exception as e:
+                    thread = _threading.Thread(target=_run, daemon=True)
+                    thread.start()
+
+                    msg_idx = 1
+                    while thread.is_alive():
+                        _time.sleep(3)
+                        msg = SCRIPT_GEN_MESSAGES[msg_idx % len(SCRIPT_GEN_MESSAGES)]
+                        msg_idx += 1
+                        yield _script_buttons_busy(f"<em>{msg}</em>")
+
+                    thread.join()
+
+                    if "err" in error:
+                        e = error["err"]
                         print(f"Script generation error: {e}")
                         traceback.print_exc()
                         msg = str(e)
                         if "api_key" in msg or "log in" in msg or "token" in msg.lower():
-                            yield _no_change("<em>HF_TOKEN not configured. Add it in Space Settings.</em>")
+                            yield _script_buttons_ready("<em>HF_TOKEN not configured. Add it in Space Settings.</em>")
                         else:
-                            yield _no_change(f"<em>Error: {msg[:200]}</em>")
+                            yield _script_buttons_ready(f"<em>Error: {msg[:200]}</em>")
+                        return
+
+                    turns, detected, title = result["data"]
+                    if not turns:
+                        yield _script_buttons_ready("<em>Empty result — try a more descriptive prompt.</em>")
+                        return
+
+                    voices = list(VOICE_DISPLAY[:detected])
+                    while len(voices) < 4:
+                        voices.append(None)
+
+                    audio_label = title if title else AUDIO_LABEL_DEFAULT
+                    yield (turns, estimate_duration(turns), "",
+                           _make_title_html(title),
+                           gr.update(label=audio_label),
+                           gr.update(interactive=True, value="Write Script with AI"),
+                           gr.update(interactive=True),
+                           detected, *voices[:4])
 
                 generate_script_btn.click(
                     fn=on_generate_script,
                     inputs=[script_prompt],
                     outputs=[turns_state, duration_display, script_gen_status,
                              script_title_display, complete_audio_output,
+                             generate_script_btn, generate_btn,
                              num_speakers] + speaker_selections,
                 )
 
@@ -677,10 +732,10 @@ def create_demo_interface():
 
                 # --- Generate audio ---
                 def _gen_yield(status_html, btn_label, btn_interactive, audio_update, log_text):
-                    """Helper to yield consistent 5-tuple outputs."""
                     return (
                         status_html,
                         gr.update(value=btn_label, interactive=btn_interactive),
+                        gr.update(interactive=btn_interactive),
                         audio_update,
                         log_text,
                     )
@@ -802,7 +857,7 @@ def create_demo_interface():
                 generate_btn.click(
                     fn=generate_podcast_wrapper,
                     inputs=[model_dropdown, num_speakers, turns_state] + speaker_selections + [cfg_scale],
-                    outputs=[primary_status, generate_btn, complete_audio_output, log_output],
+                    outputs=[primary_status, generate_btn, generate_script_btn, complete_audio_output, log_output],
                 )
 
             # ==================== ARCHITECTURE TAB ====================
