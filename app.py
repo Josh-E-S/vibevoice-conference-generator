@@ -10,8 +10,20 @@ MODAL_STUB_NAME = "vibevoice-generator"
 MODAL_CLASS_NAME = "VibeVoiceModel"
 
 AVAILABLE_MODELS = ["VibeVoice-1.5B", "VibeVoice-7B"]
-AVAILABLE_VOICES = ["Cherry", "Chicago", "Janus", "Mantis", "Sponge", "Starchild"]
-DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
+VOICE_GENDERS = {
+    "Cherry": "F", "Chicago": "M", "Janus": "M",
+    "Mantis": "F", "Sponge": "M", "Starchild": "F",
+}
+AVAILABLE_VOICES = list(VOICE_GENDERS.keys())
+VOICE_DISPLAY = [f"{name} ({g})" for name, g in VOICE_GENDERS.items()]
+DEFAULT_SPEAKERS_DISPLAY = ["Cherry (F)", "Chicago (M)", "Janus (M)", "Mantis (F)"]
+
+
+def voice_display_to_name(display: str) -> str:
+    """Strip gender tag: 'Cherry (F)' -> 'Cherry'"""
+    if display and " (" in display:
+        return display.rsplit(" (", 1)[0]
+    return display
 
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 SCRIPT_MAX_WORDS = 1000           # AI generation cap
@@ -260,21 +272,53 @@ CUSTOM_CSS = """
 
 /* ---- Generation status banner ---- */
 .gen-status {
-    border-radius: 10px;
-    padding: 16px 20px;
-    margin-top: 8px;
+    border-radius: 12px;
+    padding: 18px 24px;
+    margin-top: 10px;
     text-align: center;
     font-size: 1.05em;
     min-height: 0;
+    position: relative;
 }
 .gen-status-active {
-    background: var(--background-fill-secondary);
-    border: 1px solid var(--border-color-primary);
-    animation: pulse-border 2s ease-in-out infinite;
+    background: linear-gradient(
+        90deg,
+        var(--background-fill-secondary) 0%,
+        rgba(99, 102, 241, 0.12) 50%,
+        var(--background-fill-secondary) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s ease-in-out infinite, border-rotate 3s linear infinite;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    overflow: hidden;
 }
-@keyframes pulse-border {
-    0%, 100% { border-color: var(--border-color-primary); }
-    50% { border-color: #6366f1; }
+.gen-status-active::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 14px;
+    background: conic-gradient(
+        from 0deg,
+        #6366f1, #ec4899, #22c55e, #f59e0b, #6366f1
+    );
+    z-index: -1;
+    animation: spin 2.5s linear infinite;
+}
+.gen-status-active::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    border-radius: 10px;
+    background: var(--background-fill-secondary);
+    z-index: -1;
+}
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
 """
 
@@ -409,16 +453,24 @@ def create_demo_interface():
                             return
 
                         n_speakers = max(t["speaker"] for t in turns) if turns else 1
-                        speaker_choices = [f"Speaker {i+1}" for i in range(max(n_speakers, 1))]
+                        # Build speaker labels with voice gender if assigned
+                        speaker_choices = []
+                        for i in range(max(n_speakers, 1)):
+                            voice_name = AVAILABLE_VOICES[i] if i < len(AVAILABLE_VOICES) else None
+                            gender = VOICE_GENDERS.get(voice_name, "")
+                            tag = f" ({gender})" if gender else ""
+                            speaker_choices.append(f"Speaker {i+1}{tag}")
 
                         for idx, turn in enumerate(turns):
                             spk_num = turn["speaker"]
                             color_class = f"speaker-{spk_num}" if 1 <= spk_num <= 4 else "speaker-1"
+                            # Find the matching choice for this speaker number
+                            spk_value = next((c for c in speaker_choices if c.startswith(f"Speaker {spk_num}")), f"Speaker {spk_num}")
 
                             with gr.Row(key=f"turn-{idx}", elem_classes=color_class):
                                 spk_dd = gr.Dropdown(
                                     choices=speaker_choices,
-                                    value=f"Speaker {spk_num}",
+                                    value=spk_value,
                                     label="",
                                     scale=1, min_width=115,
                                     container=False,
@@ -447,7 +499,9 @@ def create_demo_interface():
 
                             def on_speaker_change(new_spk, current_turns, i=idx):
                                 if i < len(current_turns):
-                                    current_turns[i]["speaker"] = int(new_spk.replace("Speaker ", ""))
+                                    # Parse "Speaker 2 (M)" -> 2
+                                    num = int(re.match(r"Speaker (\d+)", new_spk).group(1))
+                                    current_turns[i]["speaker"] = num
                                 return current_turns
 
                             spk_dd.change(fn=on_speaker_change, inputs=[spk_dd, turns_state],
@@ -479,8 +533,8 @@ def create_demo_interface():
                         speaker_selections = []
                         for i in range(4):
                             s = gr.Dropdown(
-                                choices=AVAILABLE_VOICES,
-                                value=DEFAULT_SPEAKERS[i] if i < len(DEFAULT_SPEAKERS) else None,
+                                choices=VOICE_DISPLAY,
+                                value=DEFAULT_SPEAKERS_DISPLAY[i] if i < len(DEFAULT_SPEAKERS_DISPLAY) else None,
                                 label=f"Voice {i+1}",
                                 visible=(i < 2),
                                 scale=1,
@@ -574,7 +628,7 @@ def create_demo_interface():
                             yield _no_change("<em>Empty result — try a more descriptive prompt.</em>")
                             return
 
-                        voices = list(AVAILABLE_VOICES[:detected])
+                        voices = list(VOICE_DISPLAY[:detected])
                         while len(voices) < 4:
                             voices.append(None)
 
@@ -610,7 +664,7 @@ def create_demo_interface():
                     num = SCRIPT_SPEAKER_COUNTS[idx] if idx < len(SCRIPT_SPEAKER_COUNTS) else 1
                     turns = parse_script_to_turns(script)
 
-                    voices = list(AVAILABLE_VOICES[:num])
+                    voices = list(VOICE_DISPLAY[:num])
                     while len(voices) < 4:
                         voices.append(None)
 
@@ -681,7 +735,7 @@ def create_demo_interface():
                     )
 
                     try:
-                        speakers = speakers_and_params[:4]
+                        speakers = [voice_display_to_name(s) for s in speakers_and_params[:4]]
                         cfg_scale_val = speakers_and_params[4]
                         current_log = ""
                         last_stage = "connecting"
