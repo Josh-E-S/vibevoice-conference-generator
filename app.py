@@ -278,47 +278,39 @@ CUSTOM_CSS = """
     text-align: center;
     font-size: 1.05em;
     min-height: 0;
-    position: relative;
 }
 .gen-status-active {
+    border: 2px solid #6366f1;
     background: linear-gradient(
         90deg,
-        var(--background-fill-secondary) 0%,
-        rgba(99, 102, 241, 0.12) 50%,
-        var(--background-fill-secondary) 100%
+        rgba(99, 102, 241, 0.05) 0%,
+        rgba(99, 102, 241, 0.18) 30%,
+        rgba(236, 72, 153, 0.14) 50%,
+        rgba(99, 102, 241, 0.18) 70%,
+        rgba(99, 102, 241, 0.05) 100%
     );
-    background-size: 200% 100%;
-    animation: shimmer 2s ease-in-out infinite, border-rotate 3s linear infinite;
-    border: 2px solid transparent;
-    background-clip: padding-box;
-    overflow: hidden;
+    background-size: 300% 100%;
+    animation: gradient-sweep 2.5s ease-in-out infinite, border-glow 2s ease-in-out infinite;
+    box-shadow: 0 0 15px rgba(99, 102, 241, 0.15), 0 0 30px rgba(99, 102, 241, 0.05);
 }
-.gen-status-active::before {
-    content: '';
-    position: absolute;
-    inset: -2px;
-    border-radius: 14px;
-    background: conic-gradient(
-        from 0deg,
-        #6366f1, #ec4899, #22c55e, #f59e0b, #6366f1
-    );
-    z-index: -1;
-    animation: spin 2.5s linear infinite;
+@keyframes gradient-sweep {
+    0% { background-position: 100% 0; }
+    50% { background-position: 0% 0; }
+    100% { background-position: 100% 0; }
 }
-.gen-status-active::after {
-    content: '';
-    position: absolute;
-    inset: 2px;
-    border-radius: 10px;
-    background: var(--background-fill-secondary);
-    z-index: -1;
-}
-@keyframes shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
-@keyframes spin {
-    to { transform: rotate(360deg); }
+@keyframes border-glow {
+    0%, 100% {
+        border-color: #6366f1;
+        box-shadow: 0 0 15px rgba(99, 102, 241, 0.15), 0 0 30px rgba(99, 102, 241, 0.05);
+    }
+    33% {
+        border-color: #ec4899;
+        box-shadow: 0 0 15px rgba(236, 72, 153, 0.2), 0 0 30px rgba(236, 72, 153, 0.08);
+    }
+    66% {
+        border-color: #22c55e;
+        box-shadow: 0 0 15px rgba(34, 197, 94, 0.2), 0 0 30px rgba(34, 197, 94, 0.08);
+    }
 }
 """
 
@@ -354,23 +346,25 @@ def build_status_html(stage: str, status_line: str) -> str:
     desc = status_line or default_desc or ""
 
     if stage == "complete":
-        icon = "&#10003;"
-        color = "#22c55e"
+        icon = '<span style="color:#22c55e; font-size:1.4em; vertical-align:middle;">&#10003;</span>'
         cls = "gen-status"
     elif stage == "error":
-        icon = "&#10007;"
-        color = "#ef4444"
+        icon = '<span style="color:#ef4444; font-size:1.4em; vertical-align:middle;">&#10007;</span>'
         cls = "gen-status"
     else:
-        icon = "&#9679;"
-        color = "#6366f1"
+        # Pulsing animated dot
+        icon = (
+            '<span style="display:inline-block; width:12px; height:12px; '
+            'border-radius:50%; background:#6366f1; vertical-align:middle; '
+            'animation: dot-pulse 1.2s ease-in-out infinite;"></span>'
+        )
         cls = "gen-status gen-status-active"
 
     return (
+        f'<style>@keyframes dot-pulse {{ 0%,100% {{ opacity:1; transform:scale(1); }} 50% {{ opacity:0.4; transform:scale(0.7); }} }}</style>'
         f'<div class="{cls}">'
-        f'<span style="color:{color}; font-size:1.3em; vertical-align:middle;">{icon}</span> '
-        f'<strong>{title}</strong>'
-        f'<br><span style="opacity:0.75; font-size:0.9em;">{desc}</span>'
+        f'{icon} <strong style="font-size:1.1em;">{title}</strong>'
+        f'<br><span style="opacity:0.7; font-size:0.9em;">{desc}</span>'
         f'</div>'
     )
 
@@ -452,10 +446,9 @@ def create_demo_interface():
                             )
                             return
 
-                        n_speakers = max(t["speaker"] for t in turns) if turns else 1
-                        # Build speaker labels with voice gender if assigned
+                        # Always show all 4 speakers so users can reassign
                         speaker_choices = []
-                        for i in range(max(n_speakers, 1)):
+                        for i in range(4):
                             voice_name = AVAILABLE_VOICES[i] if i < len(AVAILABLE_VOICES) else None
                             gender = VOICE_GENDERS.get(voice_name, "")
                             tag = f" ({gender})" if gender else ""
