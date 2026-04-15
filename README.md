@@ -63,7 +63,11 @@ Full-length multi-speaker audio, ready to play or download as a WAV.
 
 A 3-speaker example generated from the prompt _"A Wizard and Orc arguing about which spell is most powerful against dragons. Suddenly, their Mom comes downstairs to interrupt their LARPing session."_
 
-▶️ **[Listen to the sample (WAV)](public/sample-generations/sample-generation-001.wav)**
+<p align="center">
+  <video src="https://github.com/Josh-E-S/vibevoice-conference-generator/raw/main/public/sample-generations/sample-generation-001.wav" controls preload="metadata" width="100%"></video>
+</p>
+
+> If the player above doesn't load, [download the WAV directly](https://github.com/Josh-E-S/vibevoice-conference-generator/raw/main/public/sample-generations/sample-generation-001.wav).
 
 Voices used: **Chicago (M)** as the Wizard, **Janus (M)** as the Orc, **Cherry (F)** as Mom.
 
