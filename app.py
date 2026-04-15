@@ -236,7 +236,14 @@ CRITICAL — ONE SPEAKER PER TURN:
 - NEVER embed another character's dialogue inside someone else's turn
 - WRONG: "Speaker 1: We need magic. Mom: Hey kids, what's going on?"
 - RIGHT: Every time the speaker changes, END the current turn, add a BLANK LINE, then start a NEW turn with "Speaker N:" on its own line
-- Do NOT use character names as inline labels like "Mom:" or "Wizard:" mid-paragraph — always use "Speaker N:" on a fresh line"""
+- Do NOT use character names as inline labels like "Mom:" or "Wizard:" mid-paragraph — always use "Speaker N:" on a fresh line
+
+AFTER THE DIALOGUE — Character roster (REQUIRED):
+- After the final dialogue turn, add a blank line, then a single line in this EXACT format:
+  Character Genders: Speaker 1: <F or M>, Speaker 2: <F or M>, Speaker 3: <F or M>, Speaker 4: <F or M>
+- Only list speakers you actually used. Use "F" for feminine-presenting voices (women, girls, moms, queens, witches, female narrators) and "M" for masculine-presenting (men, boys, dads, kings, wizards-as-male, male narrators).
+- For gender-ambiguous roles (robots, narrators, dragons), pick whichever fits the tone. Never use "N" or "?"
+- Example: "Character Genders: Speaker 1: M, Speaker 2: M, Speaker 3: F" """
 
 
 # Strip bracketed stage directions, parenthetical cues, and asterisk actions.
@@ -277,8 +284,59 @@ def sanitize_dialogue(text: str) -> str:
     return text
 
 
-def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str]:
-    """Returns (turns, num_speakers, title)."""
+_GENDER_LINE = re.compile(
+    r"character\s+genders\s*:\s*(.+?)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_GENDER_PAIR = re.compile(r"speaker\s+(\d+)\s*:\s*([FM])", re.IGNORECASE)
+
+
+def _extract_genders(raw: str) -> tuple[str, dict[int, str]]:
+    """Find and remove the 'Character Genders: ...' line. Returns (cleaned_text, genders_dict)."""
+    genders: dict[int, str] = {}
+    m = _GENDER_LINE.search(raw)
+    if not m:
+        return raw, genders
+    for pair in _GENDER_PAIR.finditer(m.group(1)):
+        try:
+            n = int(pair.group(1))
+            g = pair.group(2).upper()
+            if 1 <= n <= 4 and g in ("F", "M"):
+                genders[n] = g
+        except ValueError:
+            pass
+    cleaned = raw[: m.start()].rstrip() + "\n" + raw[m.end():].lstrip()
+    return cleaned, genders
+
+
+def assign_voices_by_gender(genders: dict[int, str], num_speakers: int) -> list[str]:
+    """Return a list of 4 voice-display strings, picking matching-gender voices without duplicates.
+
+    Falls back to DEFAULT_SPEAKERS_DISPLAY if no gender info for a slot.
+    """
+    female_pool = [v for v in AVAILABLE_VOICES if VOICE_GENDERS.get(v) == "F"]
+    male_pool = [v for v in AVAILABLE_VOICES if VOICE_GENDERS.get(v) == "M"]
+    used: set[str] = set()
+    chosen: list[str] = []
+
+    for i in range(4):
+        slot = i + 1
+        if slot <= num_speakers:
+            g = genders.get(slot)
+            pool = female_pool if g == "F" else (male_pool if g == "M" else AVAILABLE_VOICES)
+            pick = next((v for v in pool if v not in used), None)
+            if pick is None:
+                # exhausted preferred pool — fall back to any unused voice
+                pick = next((v for v in AVAILABLE_VOICES if v not in used), AVAILABLE_VOICES[0])
+            used.add(pick)
+            chosen.append(f"{pick} ({VOICE_GENDERS.get(pick, '?')})")
+        else:
+            chosen.append(DEFAULT_SPEAKERS_DISPLAY[i] if i < len(DEFAULT_SPEAKERS_DISPLAY) else None)
+    return chosen
+
+
+def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str, list[str]]:
+    """Returns (turns, num_speakers, title, voice_selections)."""
     system = SCRIPT_SYSTEM_PROMPT.format(max_words=SCRIPT_MAX_WORDS)
     response = llm_client.chat_completion(
         messages=[
@@ -297,6 +355,9 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str]:
         title = lines[0].split(":", 1)[1].strip()
         raw = "\n".join(lines[1:])
 
+    # Extract and strip the "Character Genders:" line before parsing turns
+    raw, genders = _extract_genders(raw)
+
     turns = parse_script_to_turns(raw)
     # Scrub stage directions from each turn, drop any turn that becomes empty
     turns = [
@@ -311,7 +372,9 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str]:
         total_words = sum(len(t["text"].split()) for t in turns)
     speaker_ids = {t["speaker"] for t in turns}
     num_speakers = max(min(len(speaker_ids), 4), 1) if speaker_ids else 1
-    return turns, num_speakers, title
+
+    voice_selections = assign_voices_by_gender(genders, num_speakers)
+    return turns, num_speakers, title, voice_selections
 
 
 PARODY_SYSTEM_PROMPT = """You are a comedian narrator. The user will give you a scenario. Write a SHORT, funny behind-the-scenes narration of what's "really" happening while their audio is being generated. Be absurd, self-aware, and poke fun at AI.
@@ -543,6 +606,8 @@ def create_demo_interface():
         turns_state = gr.State([])
         script_title_state = gr.State("")
         parody_lines_state = gr.State([])  # funny loading story for audio generation
+        # Current voice selection per speaker slot (list of 4 display strings like "Cherry (F)")
+        voice_selections_state = gr.State(list(DEFAULT_SPEAKERS_DISPLAY))
 
         # ---- BANNER ----
         gr.HTML("""
@@ -595,8 +660,8 @@ def create_demo_interface():
                     duration_display = gr.HTML(value="")
 
                 with gr.Column(elem_classes="conversation-scroll"):
-                    @gr.render(inputs=[turns_state, gr.State(4)])
-                    def render_turns(turns, _max):
+                    @gr.render(inputs=[turns_state, voice_selections_state])
+                    def render_turns(turns, voice_sels):
                         if not turns:
                             gr.Markdown(
                                 "Your conversation will appear here.\n\n"
@@ -606,12 +671,16 @@ def create_demo_interface():
                             )
                             return
 
-                        # Show all 4 speakers with voice name + gender
+                        # Build speaker choice labels from the CURRENT voice selections,
+                        # so changing a Voice dropdown below propagates to the tags above.
                         speaker_choices = []
                         for i in range(4):
-                            voice_name = AVAILABLE_VOICES[i] if i < len(AVAILABLE_VOICES) else "?"
-                            gender = VOICE_GENDERS.get(voice_name, "")
-                            speaker_choices.append(f"Speaker {i+1} - {voice_name} ({gender})")
+                            sel = voice_sels[i] if voice_sels and i < len(voice_sels) else None
+                            if sel:
+                                # sel looks like "Cherry (F)" — display directly
+                                speaker_choices.append(f"Speaker {i+1} - {sel}")
+                            else:
+                                speaker_choices.append(f"Speaker {i+1}")
 
                         for idx, turn in enumerate(turns):
                             spk_num = turn["speaker"]
@@ -698,6 +767,39 @@ def create_demo_interface():
                             label="CFG Scale",
                         )
 
+                # ---- Voice preview ----
+                with gr.Accordion("🔊 Preview voices before generating", open=False):
+                    with gr.Row():
+                        preview_voice = gr.Dropdown(
+                            choices=VOICE_DISPLAY,
+                            value=VOICE_DISPLAY[0] if VOICE_DISPLAY else None,
+                            label="Pick a voice",
+                            scale=2,
+                        )
+                        preview_audio = gr.Audio(
+                            label="Sample",
+                            value=os.path.join("public", "voices", f"{AVAILABLE_VOICES[0]}.mp3") if AVAILABLE_VOICES else None,
+                            autoplay=False,
+                            show_download_button=False,
+                            scale=3,
+                        )
+
+                    def _load_preview(display: str):
+                        name = voice_display_to_name(display) if display else None
+                        if not name:
+                            return gr.update(value=None)
+                        path = os.path.join("public", "voices", f"{name}.mp3")
+                        if not os.path.exists(path):
+                            return gr.update(value=None)
+                        return gr.update(value=path)
+
+                    preview_voice.change(
+                        fn=_load_preview,
+                        inputs=[preview_voice],
+                        outputs=[preview_audio],
+                        queue=False,
+                    )
+
                 # ---- STEP 4: GENERATE ----
                 generate_btn = gr.Button(
                     "Generate Conference Audio", size="lg", variant="primary",
@@ -727,6 +829,19 @@ def create_demo_interface():
                     inputs=[num_speakers],
                     outputs=speaker_selections,
                 )
+
+                # Two-way sync: when a Voice dropdown changes, update voice_selections_state
+                # so the script turn tags re-render with the new voice label.
+                def _sync_voice_state(*voices):
+                    return list(voices)
+
+                for sel in speaker_selections:
+                    sel.change(
+                        fn=_sync_voice_state,
+                        inputs=speaker_selections,
+                        outputs=[voice_selections_state],
+                        queue=False,
+                    )
 
                 def add_turn(turns):
                     if len(turns) >= MAX_TURNS:
@@ -801,13 +916,13 @@ def create_demo_interface():
                     "One more revision, we promise...",
                 ]
 
-                # outputs: turns, duration, status, title, audio, script_btn, gen_btn, parody, num_speakers, *4 voices
+                # outputs: turns, duration, status, title, audio, script_btn, gen_btn, parody, num_speakers, *4 voices, voice_selections_state
                 def _script_no_change(status_html):
                     return (gr.update(), gr.update(), status_html,
                             gr.update(), gr.update(),
                             gr.update(), gr.update(),
                             gr.update(),
-                            gr.update(), *[gr.update()] * 4)
+                            gr.update(), *[gr.update()] * 4, gr.update())
 
                 def _script_buttons_busy(status_html):
                     return (gr.update(), gr.update(), status_html,
@@ -815,7 +930,7 @@ def create_demo_interface():
                             gr.update(interactive=False, value="Writing..."),
                             gr.update(interactive=False),
                             gr.update(),
-                            gr.update(), *[gr.update()] * 4)
+                            gr.update(), *[gr.update()] * 4, gr.update())
 
                 def _script_buttons_ready(status_html=""):
                     return (gr.update(), gr.update(), status_html,
@@ -823,7 +938,7 @@ def create_demo_interface():
                             gr.update(interactive=True, value="Write Script with AI"),
                             gr.update(interactive=True),
                             gr.update(),
-                            gr.update(), *[gr.update()] * 4)
+                            gr.update(), *[gr.update()] * 4, gr.update())
 
                 def _make_title_html(title):
                     if title:
@@ -879,14 +994,19 @@ def create_demo_interface():
                             yield _script_buttons_ready(f"<em>Error: {msg[:200]}</em>")
                         return
 
-                    turns, detected, title = result["data"]
+                    turns, detected, title, voice_picks = result["data"]
                     if not turns:
                         yield _script_buttons_ready("<em>Empty result — try a more descriptive prompt.</em>")
                         return
 
-                    voices = list(VOICE_DISPLAY[:detected])
+                    # voice_picks is a list of 4 display strings from assign_voices_by_gender
+                    voices = list(voice_picks)
                     while len(voices) < 4:
                         voices.append(None)
+
+                    # Strip "Speaker N - " style prefixes so the Voice dropdowns get clean values.
+                    # assign_voices_by_gender already returns display strings like "Cherry (F)".
+                    clean_voices = voices[:4]
 
                     audio_label = title if title else AUDIO_LABEL_DEFAULT
                     yield (turns, estimate_duration(turns), "",
@@ -895,7 +1015,7 @@ def create_demo_interface():
                            gr.update(interactive=True, value="Write Script with AI"),
                            gr.update(interactive=True),
                            parody_result["lines"],
-                           detected, *voices[:4])
+                           detected, *clean_voices, clean_voices)
 
                 generate_script_btn.click(
                     fn=on_generate_script,
@@ -904,13 +1024,13 @@ def create_demo_interface():
                              script_title_display, complete_audio_output,
                              generate_script_btn, generate_btn,
                              parody_lines_state,
-                             num_speakers] + speaker_selections,
+                             num_speakers] + speaker_selections + [voice_selections_state],
                 )
 
                 # --- Load examples ---
                 def load_example(idx):
                     if idx >= len(EXAMPLE_SCRIPTS):
-                        return [], 2, "", "<h3 style='margin:0'>Script</h3>", gr.update(), *[None] * 4
+                        return [], 2, "", "<h3 style='margin:0'>Script</h3>", gr.update(), *[None] * 4, list(DEFAULT_SPEAKERS_DISPLAY)
 
                     title = example_names[idx]
                     script = EXAMPLE_SCRIPTS_NATURAL[idx]
@@ -924,14 +1044,15 @@ def create_demo_interface():
                     return (turns, num, estimate_duration(turns),
                             f"<h3 style='margin:0'>{title}</h3>",
                             gr.update(label=title),
-                            *voices[:4])
+                            *voices[:4], voices[:4])
 
                 for idx, btn in enumerate(example_buttons):
                     btn.click(
                         fn=lambda i=idx: load_example(i),
                         inputs=[],
                         outputs=[turns_state, num_speakers, duration_display,
-                                 script_title_display, complete_audio_output] + speaker_selections,
+                                 script_title_display, complete_audio_output]
+                                + speaker_selections + [voice_selections_state],
                         queue=False,
                     )
 
