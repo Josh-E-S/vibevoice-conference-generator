@@ -54,3 +54,7 @@ vibevoice_local_backup/
 # Ignore local Modal scratch scripts
 check_model.py
 run_phase3.py
+
+# Large sample media hosted externally via GitHub user-attachments CDN
+public/sample-generations/*.mp4
+public/sample-generations/*.wav
