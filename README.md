@@ -8,6 +8,16 @@ Generate realistic multi-speaker conference calls, meetings, and podcasts from a
 
 **Try it live:** [Hugging Face Space](https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice)
 
+### 🎬 Watch the demo
+
+
+
+https://github.com/user-attachments/assets/cfe5397f-7aad-4662-b0b8-e62d7546a9fb
+
+
+
+*A 3-speaker example — Wizard (Chicago), Orc (Janus), and Mom (Cherry) — generated from a single sentence prompt.*
+
 ---
 
 ## Features
@@ -61,12 +71,7 @@ Full-length multi-speaker audio, ready to play or download as a WAV.
 
 ## Sample output
 
-A 3-speaker example generated from the prompt _"A Wizard and Orc arguing about which spell is most powerful against dragons. Suddenly, their Mom comes downstairs to interrupt their LARPing session."_
-
-
-
-https://github.com/user-attachments/assets/cfe5397f-7aad-4662-b0b8-e62d7546a9fb
-
+The [demo video above](#-watch-the-demo) was generated from the prompt _"A Wizard and Orc arguing about which spell is most powerful against dragons. Suddenly, their Mom comes downstairs to interrupt their LARPing session."_
 
 Voices used: **Chicago (M)** as the Wizard, **Janus (M)** as the Orc, **Cherry (F)** as Mom.
 
