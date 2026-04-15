@@ -19,11 +19,11 @@ Generate realistic multi-speaker conference calls, meetings, and podcasts from a
 
 **Try it live:** [Hugging Face Space](https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice)
 
-### 🎬 Watch the demo
+### Listen to the Demo
 
 https://github.com/user-attachments/assets/cfe5397f-7aad-4662-b0b8-e62d7546a9fb
 
-_A 3-speaker example — Wizard (Chicago), Orc (Janus), and Mom (Cherry) — generated from a single sentence prompt._
+_A 3-speaker example — Wizard (Chicago), Orc (Janus), and Mom (Cherry) — generated from a single sentence prompt. Audio visualizer created separately._
 
 ---
 
