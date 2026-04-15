@@ -180,5 +180,3 @@ Required env:
 - **[Gradio](https://gradio.app)** + **[Hugging Face Spaces](https://huggingface.co/spaces)** — frontend hosting
 
 ---
-
-HF Spaces configuration reference: https://huggingface.co/docs/hub/spaces-config-reference
