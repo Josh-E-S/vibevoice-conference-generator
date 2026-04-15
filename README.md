@@ -63,7 +63,14 @@ Full-length multi-speaker audio, ready to play or download as a WAV.
 
 A 3-speaker example generated from the prompt _"A Wizard and Orc arguing about which spell is most powerful against dragons. Suddenly, their Mom comes downstairs to interrupt their LARPing session."_
 
-▶️ **[Listen to the sample (WAV)](public/sample-generations/sample-generation-001.wav)**
+<p align="center">
+  <audio controls src="public/sample-generations/sample-generation-001.wav">
+    Your viewer doesn't support inline audio —
+    <a href="public/sample-generations/sample-generation-001.wav">download the sample WAV</a>.
+  </audio>
+</p>
+
+▶️ **[Download / direct link](public/sample-generations/sample-generation-001.wav)** (for GitHub viewers where inline audio isn't supported)
 
 Voices used: **Chicago (M)** as the Wizard, **Janus (M)** as the Orc, **Cherry (F)** as Mom.
 
