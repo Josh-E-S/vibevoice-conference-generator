@@ -10,13 +10,9 @@ Generate realistic multi-speaker conference calls, meetings, and podcasts from a
 
 ### 🎬 Watch the demo
 
-
-
 https://github.com/user-attachments/assets/cfe5397f-7aad-4662-b0b8-e62d7546a9fb
 
-
-
-*A 3-speaker example — Wizard (Chicago), Orc (Janus), and Mom (Cherry) — generated from a single sentence prompt.*
+_A 3-speaker example — Wizard (Chicago), Orc (Janus), and Mom (Cherry) — generated from a single sentence prompt._
 
 ---
 
@@ -182,4 +178,4 @@ Required env:
 
 ---
 
-`<sub>`HF Spaces configuration reference: https://huggingface.co/docs/hub/spaces-config-reference `</sub>`
+HF Spaces configuration reference: https://huggingface.co/docs/hub/spaces-config-reference
