@@ -79,31 +79,95 @@ EXAMPLE_SCRIPTS, EXAMPLE_SCRIPTS_NATURAL = load_example_scripts()
 
 # --- Script parsing helpers ---
 
+# Matches "Speaker 3:" or a named character tag like "Mom:", "Dr. Smith:", "Wizard:"
+# at the start of a line OR inline mid-paragraph. Captures the label and the text after it.
+_SPEAKER_TAG = re.compile(
+    r"(?:^|(?<=[\s\"'.!?,—–\-]))"                    # boundary: start or after whitespace/punct
+    r"(Speaker\s+\d+|[A-Z][A-Za-z.'\- ]{0,24}?)"     # label: "Speaker N" OR capitalized name
+    r"\s*:\s+"                                         # the colon separator
+    r"(?=[A-Z\"'])",                                  # followed by capital letter / quote (real dialogue)
+    re.MULTILINE,
+)
+
+# Labels we should NEVER treat as speaker tags (common false positives)
+_LABEL_BLOCKLIST = {
+    "title", "note", "scene", "setting", "fade in", "fade out", "cut to",
+    "interior", "exterior", "int", "ext", "cont", "continued", "act",
+}
+
+
+def _normalize_label(label: str) -> str:
+    return re.sub(r"\s+", " ", label).strip().lower()
+
+
 def parse_script_to_turns(script_text: str) -> list[dict]:
-    turns = []
+    """Parse dialogue into turns, handling both 'Speaker N:' and named-character tags.
+
+    Robust to the LLM slipping in mid-paragraph speaker changes like:
+        Speaker 1: ...We need magic. Mom: Hey kids! ...
+    which get split into separate turns, with 'Mom' mapped to its own Speaker number.
+    """
+    turns: list[dict] = []
     if not script_text or not script_text.strip():
         return turns
 
-    pattern = re.compile(r"^Speaker\s+(\d+)\s*:\s*(.+)", re.IGNORECASE)
-    current_speaker = None
-    current_text = []
+    text = script_text.strip()
 
-    for line in script_text.strip().split("\n"):
-        m = pattern.match(line.strip())
+    # 1. Find every speaker tag occurrence in the entire text (line-start OR mid-line).
+    tags: list[tuple[int, int, str]] = []  # (start, end, label)
+    for m in _SPEAKER_TAG.finditer(text):
+        label = m.group(1).strip()
+        norm = _normalize_label(label)
+        if norm in _LABEL_BLOCKLIST:
+            continue
+        # Reject labels that are just common sentence-starters that happen to precede a colon
+        if norm in {"well", "so", "okay", "yes", "no", "right", "look", "listen"}:
+            continue
+        tags.append((m.start(), m.end(), label))
+
+    if not tags:
+        # No tags at all — treat entire text as Speaker 1
+        return [{"speaker": 1, "text": text}]
+
+    # 2. Assign each unique label to a speaker number.
+    # First, reserve slots for all explicit "Speaker N" numbers in the script,
+    # so inline named characters (Mom, Wizard) don't steal those numbers.
+    label_to_speaker: dict[str, int] = {}
+    reserved_numbers: set[int] = set()
+    for _, _, lbl in tags:
+        m = re.match(r"speaker\s+(\d+)", lbl, re.IGNORECASE)
         if m:
-            if current_speaker is not None:
-                turns.append({"speaker": current_speaker, "text": " ".join(current_text).strip()})
-            current_speaker = int(m.group(1))
-            current_text = [m.group(2).strip()]
-        elif line.strip():
-            if current_speaker is not None:
-                current_text.append(line.strip())
-            else:
-                current_speaker = 1
-                current_text = [line.strip()]
+            reserved_numbers.add(int(m.group(1)))
 
-    if current_speaker is not None and current_text:
-        turns.append({"speaker": current_speaker, "text": " ".join(current_text).strip()})
+    def speaker_for(label: str) -> int:
+        # "Speaker N" preserves its number; named labels get auto-assigned.
+        m = re.match(r"speaker\s+(\d+)", label, re.IGNORECASE)
+        if m:
+            n = int(m.group(1))
+            label_to_speaker.setdefault(label.lower(), n)
+            return n
+        key = label.lower()
+        if key in label_to_speaker:
+            return label_to_speaker[key]
+        # Find next available speaker number (1..4), skipping reserved & already-used.
+        used = set(label_to_speaker.values()) | reserved_numbers
+        for n in range(1, 5):
+            if n not in used:
+                label_to_speaker[key] = n
+                return n
+        # Overflow: reuse highest available named slot, cap at 4
+        label_to_speaker[key] = 4
+        return 4
+
+    # 3. Walk tags and slice out each turn's text (from end-of-tag to start-of-next-tag).
+    # Any leading text before the first tag is ignored (usually empty / title residue).
+    for i, (start, end, label) in enumerate(tags):
+        next_start = tags[i + 1][0] if i + 1 < len(tags) else len(text)
+        body = text[end:next_start].strip()
+        body = re.sub(r"\s+", " ", body)
+        if not body:
+            continue
+        turns.append({"speaker": speaker_for(label), "text": body})
 
     return turns
 
@@ -166,7 +230,13 @@ FORMAT RULES:
 - Each turn is separated by a blank line
 - Choose the right number of speakers for the scenario (1 to 4 max)
 - Keep the total script under {max_words} words
-- Output ONLY the title and script — no stage directions, no commentary, no preamble"""
+- Output ONLY the title and script — no stage directions, no commentary, no preamble
+
+CRITICAL — ONE SPEAKER PER TURN:
+- NEVER embed another character's dialogue inside someone else's turn
+- WRONG: "Speaker 1: We need magic. Mom: Hey kids, what's going on?"
+- RIGHT: Every time the speaker changes, END the current turn, add a BLANK LINE, then start a NEW turn with "Speaker N:" on its own line
+- Do NOT use character names as inline labels like "Mom:" or "Wizard:" mid-paragraph — always use "Speaker N:" on a fresh line"""
 
 
 # Strip bracketed stage directions, parenthetical cues, and asterisk actions.
