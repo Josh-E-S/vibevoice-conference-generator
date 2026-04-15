@@ -1,3 +1,14 @@
+---
+title: Conference Generator VibeVoice
+emoji: ⭐
+colorFrom: indigo
+colorTo: red
+sdk: gradio
+sdk_version: "5.44.1"
+app_file: app.py
+pinned: false
+---
+
 <p align="center">
   <img src="public/images/banner.png" alt="VibeVoice Conference Generator" width="100%"/>
 </p>
