@@ -47,3 +47,10 @@ tmp/
 
 # Ignore backend_modal directory for Hugging Face Space deployment
 backend_modal/
+
+# Ignore large local model backups (multi-GB .pt files)
+vibevoice_local_backup/
+
+# Ignore local Modal scratch scripts
+check_model.py
+run_phase3.py
