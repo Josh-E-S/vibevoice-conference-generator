@@ -29,6 +29,54 @@ Generate realistic multi-speaker conference calls, meetings, and podcasts from a
 - **Editable turn-by-turn script** — tweak speaker assignments or dialogue before rendering
 - **Title generation** — the LLM names each script automatically
 - **Two model sizes** — VibeVoice-1.5B (fast) and VibeVoice-7B (higher quality)
+- **Gender-aware voice casting** — female characters get female voices automatically (Mom → Cherry, Wizard → Chicago, etc.) with one-click override
+- **Voice preview** — sample any of the 6 voices before committing to a long generation
+
+---
+
+## Walkthrough
+
+### 1. Describe your scenario
+
+Type any scenario — a meeting, podcast, argument, TED talk — and the LLM writes the full script.
+
+<p align="center">
+  <img src="public/images/Screenshot-1.png" alt="Step 1: Prompt input" width="100%"/>
+</p>
+
+### 2. Review the script and pick voices
+
+Speaker tags auto-assign by gender. Every voice dropdown stays in sync with the tags above. Preview any voice before generating.
+
+<p align="center">
+  <img src="public/images/Screenshot-2.png" alt="Step 2: Script editor with voice sync" width="100%"/>
+</p>
+
+### 3. Generate the audio
+
+Kick off the GPU job on Modal. A funny parody narration keeps you entertained during the wait.
+
+<p align="center">
+  <img src="public/images/Screenshot-3.png" alt="Step 3: Generating" width="85%"/>
+</p>
+
+### 4. Listen and download
+
+Full-length multi-speaker audio, ready to play or download as a WAV.
+
+<p align="center">
+  <img src="public/images/Screenshot-4.png" alt="Step 4: Complete" width="85%"/>
+</p>
+
+---
+
+## Sample output
+
+A 3-speaker example generated from the prompt _"A Wizard and Orc arguing about which spell is most powerful against dragons. Suddenly, their Mom comes downstairs to interrupt their LARPing session."_
+
+▶️ **[Listen to the sample (WAV)](public/sample-generations/sample-generation-001.wav)**
+
+Voices used: **Chicago (M)** as the Wizard, **Janus (M)** as the Orc, **Cherry (F)** as Mom.
 
 ---
 
@@ -76,14 +124,14 @@ This project separates the lightweight Gradio frontend (hosted on HF Spaces) fro
 
 ## Voices
 
-| Voice | Gender |
-|-------|:------:|
-| Cherry | F |
-| Chicago | M |
-| Janus | M |
-| Mantis | F |
-| Sponge | M |
-| Starchild | F |
+| Voice     | Gender |
+| --------- | :----: |
+| Cherry    |   F    |
+| Chicago   |   M    |
+| Janus     |   M    |
+| Mantis    |   F    |
+| Sponge    |   M    |
+| Starchild |   F    |
 
 Voice samples live in `public/voices/` and are loaded as short reference clips by the VibeVoice backend.
 
@@ -106,6 +154,7 @@ python app.py
 ```
 
 Required env:
+
 - `HF_TOKEN` — Hugging Face token with Inference API access
 
 ---
@@ -117,9 +166,11 @@ Required env:
 ├── app.py                # Gradio frontend + script generation
 ├── requirements.txt      # gradio, modal, huggingface_hub
 ├── public/
-│   ├── images/           # Banner, architecture diagram, benchmark chart
-│   └── voices/           # Voice reference clips (Cherry, Chicago, ...)
-├── text_examples/        # Example scripts (1p, 2p, 3p, 4p scenarios)
+│   ├── images/              # Banner, architecture diagram, screenshots
+│   ├── voices/              # Voice reference clips (Cherry, Chicago, ...)
+│   └── sample-generations/  # Example WAV outputs
+├── text_examples/           # Example scripts (1p, 2p, 3p, 4p scenarios)
+├── tests/                   # Parser tests + example prompts
 └── README.md
 ```
 
@@ -134,4 +185,4 @@ Required env:
 
 ---
 
-<sub>HF Spaces configuration reference: https://huggingface.co/docs/hub/spaces-config-reference</sub>
+`<sub>`HF Spaces configuration reference: https://huggingface.co/docs/hub/spaces-config-reference`</sub>`
