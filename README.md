@@ -76,14 +76,6 @@ Full-length multi-speaker audio, ready to play or download as a WAV.
 
 ---
 
-## Sample output
-
-The [demo video above](#-watch-the-demo) was generated from the prompt _"A Wizard and Orc arguing about which spell is most powerful against dragons. Suddenly, their Mom comes downstairs to interrupt their LARPing session."_
-
-Voices used: **Chicago (M)** as the Wizard, **Janus (M)** as the Orc, **Cherry (F)** as Mom.
-
----
-
 ## About VibeVoice
 
 VibeVoice is Microsoft's open-source long-form, multi-speaker TTS model. It uses a frozen LLM backbone with acoustic + semantic tokenizers and a diffusion head to produce up to 90 minutes of natural conversational audio with up to 4 distinct speakers.
@@ -172,7 +164,7 @@ Required env:
 ├── public/
 │   ├── images/              # Banner, architecture diagram, screenshots
 │   ├── voices/              # Voice reference clips (Cherry, Chicago, ...)
-│   └── sample-generations/  # Example WAV outputs
+│   └── sample-generations/  # Example generations
 ├── text_examples/           # Example scripts (1p, 2p, 3p, 4p scenarios)
 ├── tests/                   # Parser tests + example prompts
 └── README.md
