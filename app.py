@@ -145,6 +145,20 @@ STYLE:
 - Speakers should reference what the other person said, react naturally, and build on previous points
 - Include personality — people joke, digress slightly, use analogies, get passionate about topics
 
+CASTING (IMPORTANT):
+- Before writing, identify EVERY character in the scenario — including any who enter, interrupt, or arrive later (parents, bosses, narrators, bystanders, etc.)
+- If the prompt mentions someone at all, they get their own Speaker number (up to 4 max)
+- Example: "Two kids argue until their mom walks in" = 3 speakers, not 2
+- Example: "A detective interviews a suspect while a lawyer objects" = 3 speakers
+- Assign Speaker numbers in order of first appearance
+
+STRICT NO-NO's (VibeVoice reads these LITERALLY as spoken words — never use them):
+- NO bracketed stage directions: [whispering], [sighs], [laughs], [door slams], [pause], [music], etc.
+- NO parenthetical emotion cues: (softly), (angrily), (laughing), (sarcastically), etc.
+- NO asterisk actions: *laughs*, *sighs*, *door opens*, etc.
+- NO scene headings, sound effects, or narration lines
+- Convey emotion through WORD CHOICE and natural speech only (e.g., actually type "hahaha" or "ugh" or "whoa" as part of the dialogue itself)
+
 FORMAT RULES:
 - Start with a title on the FIRST LINE in this format: "Title: Your Script Title Here"
 - Then a blank line, then the dialogue
@@ -153,6 +167,44 @@ FORMAT RULES:
 - Choose the right number of speakers for the scenario (1 to 4 max)
 - Keep the total script under {max_words} words
 - Output ONLY the title and script — no stage directions, no commentary, no preamble"""
+
+
+# Strip bracketed stage directions, parenthetical cues, and asterisk actions.
+# VibeVoice reads these literally, so we defensively remove them even if the LLM sneaks them in.
+_STAGE_DIRECTION_PATTERNS = [
+    re.compile(r"\[[^\]]*\]"),           # [whispering], [sighs], [door slams]
+    re.compile(r"\*[^*\n]+\*"),          # *laughs*, *sighs*
+]
+# Common parenthetical emotion/action cues — only strip short ones that look like directions,
+# not legitimate asides like "(which, by the way, is huge)".
+_PAREN_CUE_WORDS = {
+    "softly", "angrily", "laughing", "laughs", "sighs", "sighing", "whispers", "whispering",
+    "shouts", "shouting", "sarcastically", "sarcastic", "nervously", "excitedly",
+    "quietly", "loudly", "pauses", "pause", "crying", "sobbing", "giggling", "chuckling",
+    "sternly", "coldly", "warmly", "mockingly", "sadly", "happily", "angry", "sad",
+    "clears throat", "beat", "aside", "muttering", "mutters", "groans", "groaning",
+}
+_PAREN_PATTERN = re.compile(r"\(([^)\n]{1,40})\)")
+
+
+def sanitize_dialogue(text: str) -> str:
+    """Remove stage directions VibeVoice would read as literal words."""
+    for pat in _STAGE_DIRECTION_PATTERNS:
+        text = pat.sub("", text)
+
+    def _paren_filter(m):
+        inside = m.group(1).strip().lower().rstrip(".!?")
+        if inside in _PAREN_CUE_WORDS:
+            return ""
+        # Also strip single-word parentheticals ending in -ly (adverbs)
+        if " " not in inside and inside.endswith("ly"):
+            return ""
+        return m.group(0)  # keep legitimate asides
+
+    text = _PAREN_PATTERN.sub(_paren_filter, text)
+    # Collapse whitespace the stripping may have introduced
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text
 
 
 def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str]:
@@ -176,6 +228,12 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str]:
         raw = "\n".join(lines[1:])
 
     turns = parse_script_to_turns(raw)
+    # Scrub stage directions from each turn, drop any turn that becomes empty
+    turns = [
+        {"speaker": t["speaker"], "text": sanitize_dialogue(t["text"])}
+        for t in turns
+    ]
+    turns = [t for t in turns if t["text"].strip()]
     turns = turns[:MAX_TURNS]
     total_words = sum(len(t["text"].split()) for t in turns)
     while total_words > MAX_SCRIPT_WORDS and turns:
