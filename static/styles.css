@@ -2,6 +2,7 @@
   --cream: #f7f4ee;
   --paper: #ffffff;
   --paper-soft: #fbf9f4;
+  --field: #ece4d2;
   --border: #e7e1d3;
   --border-strong: #d8cfb9;
   --ink: #262019;
@@ -216,9 +217,10 @@ input[type="range"] { flex: 1; accent-color: var(--accent); }
 .composer-row { display: flex; gap: 10px; align-items: flex-end; }
 .composer textarea {
   flex: 1;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   resize: none;
-  background: var(--paper-soft);
+  background: var(--field);
+  box-shadow: inset 0 1px 3px rgba(38, 32, 25, 0.08);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   font-size: 1rem;
@@ -492,13 +494,20 @@ dialog::backdrop { background: rgba(38, 32, 25, 0.35); }
 .dialog-body p { font-size: 0.82rem; color: var(--ink-dim); margin: 0 0 14px; }
 .dialog-body textarea {
   width: 100%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 10px;
   font-size: 0.86rem;
-  background: var(--paper-soft);
+  background: var(--field);
+  box-shadow: inset 0 1px 3px rgba(38, 32, 25, 0.08);
   resize: vertical;
   color: var(--ink);
+}
+.dialog-body textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--paper);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .dialog-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; gap: 10px; }
 .dialog-actions input[type="file"] { font-size: 0.78rem; max-width: 190px; }
