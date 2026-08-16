@@ -1,6 +1,7 @@
 from __future__ import annotations  # keep np.ndarray hints lazy at deploy time
 
 import gc
+import io
 import os
 import time
 import threading
@@ -231,9 +232,12 @@ class VibeVoiceModel:
         except Exception as e:
             print(f"Cache cleanup error: {e}")
 
-    def read_audio(self, audio_path: str, target_sr: int = 24000) -> np.ndarray:
+    def read_audio(self, audio_source, target_sr: int = 24000) -> np.ndarray:
+        """audio_source is a file path (preset) or raw audio bytes (user-uploaded clone)."""
         try:
-            wav, sr = sf.read(audio_path)
+            if isinstance(audio_source, (bytes, bytearray)):
+                audio_source = io.BytesIO(audio_source)
+            wav, sr = sf.read(audio_source)
             if len(wav.shape) > 1:
                 wav = np.mean(wav, axis=1)
             if sr != target_sr:
@@ -424,37 +428,54 @@ class VibeVoiceModel:
                          speaker_1: str = None,
                          speaker_2: str = None,
                          speaker_3: str = None,
-                         speaker_4: str = None):
+                         speaker_4: str = None,
+                         custom_audio_1: bytes = None,
+                         custom_audio_2: bytes = None,
+                         custom_audio_3: bytes = None,
+                         custom_audio_4: bytes = None):
         """
-        This is the main inference function that will be called from the Gradio app.
-        Yields progress updates during generation.
+        This is the main inference function that will be called from the frontend.
+        Yields progress updates during generation. A speaker slot uses its
+        custom_audio_N clip (user-uploaded voice clone) when provided, otherwise
+        falls back to the named preset in speaker_N.
         """
         try:
             if model_name not in self.models:
                 raise ValueError(f"Unknown model: {model_name}")
 
             selected_speakers = [speaker_1, speaker_2, speaker_3, speaker_4][:num_speakers]
+            selected_custom_audio = [custom_audio_1, custom_audio_2, custom_audio_3, custom_audio_4][:num_speakers]
+            has_custom_voice = any(a is not None for a in selected_custom_audio)
+
+            speaker_labels = [
+                f"custom clone ({len(audio)} bytes)" if audio is not None else (name or "unset")
+                for name, audio in zip(selected_speakers, selected_custom_audio)
+            ]
             log_lines = [
                 f"Generating conference with {num_speakers} speakers",
                 f"Model: {model_name}",
                 f"Parameters: CFG Scale={cfg_scale}",
-                f"Speakers: {', '.join(selected_speakers)}",
+                f"Speakers: {', '.join(speaker_labels)}",
             ]
             log_text = "\n".join(log_lines)
 
-            # Check cache first
-            cache_key = self._generate_cache_key(script, model_name, selected_speakers, cfg_scale)
-            cached_audio, cached_sr = self._get_cached_audio(cache_key)
-            if cached_audio is not None:
-                log_lines.append("Cache hit! Returning previously generated audio.")
-                log_text = "\n".join(log_lines)
-                yield self._emit_progress(
-                    stage="complete", pct=100,
-                    status="Loaded from cache.",
-                    log_text=log_text,
-                    audio=(cached_sr, cached_audio), done=True,
-                )
-                return
+            # Check cache first — skipped entirely for custom voice clones, since a cache
+            # hit would silently return a DIFFERENT user's cloned-voice audio for what
+            # looks like the same request (the clone's actual bytes aren't part of the key).
+            cache_key = None
+            if not has_custom_voice:
+                cache_key = self._generate_cache_key(script, model_name, selected_speakers, cfg_scale)
+                cached_audio, cached_sr = self._get_cached_audio(cache_key)
+                if cached_audio is not None:
+                    log_lines.append("Cache hit! Returning previously generated audio.")
+                    log_text = "\n".join(log_lines)
+                    yield self._emit_progress(
+                        stage="complete", pct=100,
+                        status="Loaded from cache.",
+                        log_text=log_text,
+                        audio=(cached_sr, cached_audio), done=True,
+                    )
+                    return
 
             yield self._emit_progress(
                 stage="queued",
@@ -501,7 +522,9 @@ class VibeVoiceModel:
             if not 1 <= num_speakers <= 4:
                 raise ValueError("Error: Number of speakers must be between 1 and 4.")
 
-            for i, speaker_name in enumerate(selected_speakers):
+            for i, (speaker_name, custom_audio) in enumerate(zip(selected_speakers, selected_custom_audio)):
+                if custom_audio is not None:
+                    continue
                 if not speaker_name or speaker_name not in self.available_voices:
                     raise ValueError(f"Error: Please select a valid speaker for Speaker {i+1}.")
 
@@ -515,19 +538,20 @@ class VibeVoiceModel:
             )
 
             voice_samples = []
-            for i, speaker_name in enumerate(selected_speakers):
-                audio_path = self.available_voices[speaker_name]
-                audio_data = self.read_audio(audio_path)
+            for i, (speaker_name, custom_audio) in enumerate(zip(selected_speakers, selected_custom_audio)):
+                label = speaker_labels[i]
+                audio_source = custom_audio if custom_audio is not None else self.available_voices[speaker_name]
+                audio_data = self.read_audio(audio_source)
                 if len(audio_data) == 0:
-                    raise ValueError(f"Error: Failed to load audio for {speaker_name}")
+                    raise ValueError(f"Error: Failed to load audio for Speaker {i+1} ({label}). Is the file a valid audio clip?")
                 voice_samples.append(audio_data)
                 voice_pct = 25 + ((i + 1) / len(selected_speakers)) * 15
-                log_lines.append(f"Loaded voice {i+1}/{len(selected_speakers)}: {speaker_name}")
+                log_lines.append(f"Loaded voice {i+1}/{len(selected_speakers)}: {label}")
                 log_text = "\n".join(log_lines)
                 yield self._emit_progress(
                     stage="loading_voices",
                     pct=voice_pct,
-                    status=f"Loaded {speaker_name}",
+                    status=f"Loaded {label}",
                     log_text=log_text,
                 )
 
@@ -814,7 +838,8 @@ class VibeVoiceModel:
             total_duration = len(audio) / sample_rate
             log_lines.append(f"Audio duration: {total_duration:.2f} seconds")
 
-            self._save_to_cache(cache_key, audio, sample_rate)
+            if cache_key is not None:
+                self._save_to_cache(cache_key, audio, sample_rate)
             log_lines.append("Complete!")
             log_text = "\n".join(log_lines)
 
