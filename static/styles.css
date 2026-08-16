@@ -207,7 +207,7 @@ input[type="range"] { flex: 1; accent-color: var(--accent); }
 
 .composer {
   background: var(--paper);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   padding: 16px 18px;
   box-shadow: var(--shadow);
@@ -216,16 +216,24 @@ input[type="range"] { flex: 1; accent-color: var(--accent); }
 .composer-row { display: flex; gap: 10px; align-items: flex-end; }
 .composer textarea {
   flex: 1;
-  border: none;
+  border: 1px solid var(--border);
   resize: none;
-  background: transparent;
+  background: var(--paper-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
   font-size: 1rem;
   font-family: var(--font);
   color: var(--ink);
   min-height: 44px;
   max-height: 140px;
+  cursor: text;
 }
-.composer textarea:focus { outline: none; }
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--paper);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .composer textarea::placeholder { color: var(--ink-faint); font-style: italic; }
 
 .btn {
