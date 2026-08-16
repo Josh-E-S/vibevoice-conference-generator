@@ -58,3 +58,6 @@ run_phase3.py
 # Large sample media hosted externally via GitHub user-attachments CDN
 public/sample-generations/*.mp4
 public/sample-generations/*.wav
+
+# Local working notes (cold-start brief), never committed
+PIPELINE_NOTES.md

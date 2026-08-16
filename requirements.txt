@@ -1,3 +1,7 @@
-gradio
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
 modal
 huggingface_hub
+numpy
+scipy

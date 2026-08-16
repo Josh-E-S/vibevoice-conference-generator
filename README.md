@@ -3,9 +3,8 @@ title: Conference Generator VibeVoice
 emoji: ⭐
 colorFrom: indigo
 colorTo: red
-sdk: gradio
-sdk_version: "5.44.1"
-app_file: app.py
+sdk: docker
+app_port: 7860
 pinned: false
 ---
 
@@ -100,21 +99,23 @@ VibeVoice leads on preference, realism, and richness among long-form multi-speak
 
 ## Architecture
 
-This project separates the lightweight Gradio frontend (hosted on HF Spaces) from the GPU-heavy model backend (hosted on [Modal](https://modal.com)).
+This project separates the lightweight FastAPI frontend (hosted on HF Spaces as a Docker Space) from the GPU-heavy model backend (hosted on [Modal](https://modal.com)).
 
 ```
-┌──────────────────────┐      ┌─────────────────────────┐
-│  HF Space (Gradio)   │      │   Modal (GPU backend)   │
-│  ─────────────────   │      │   ───────────────────   │
-│  • Prompt UI         │ ───► │  • VibeVoice-1.5B / 7B  │
-│  • Script editor     │      │  • Voice prompt loader  │
-│  • Qwen2.5-Coder 32B │      │  • Long-form synthesis  │
-│    (script writing)  │ ◄─── │  • Returns WAV bytes    │
-└──────────────────────┘      └─────────────────────────┘
+┌──────────────────────────┐      ┌─────────────────────────┐
+│  HF Space (FastAPI +     │      │   Modal (GPU backend)   │
+│  static HTML/CSS/JS)     │      │   ───────────────────   │
+│  ─────────────────────   │      │  • VibeVoice-1.5B / 7B  │
+│  • Prompt UI             │ ───► │  • Voice prompt loader  │
+│  • Script editor         │      │  • Long-form synthesis  │
+│  • Qwen2.5-Coder 32B     │      │  • Streams progress +   │
+│    (script writing)      │ ◄─── │    WAV bytes            │
+│  • SSE progress streaming│      │                          │
+└──────────────────────────┘      └─────────────────────────┘
 ```
 
-- **Frontend** (`app.py`): Gradio UI, script generation via HF Inference API (Qwen2.5-Coder-32B), script parsing, playback.
-- **Backend** (`backend_modal/`, not included in this repo): deployed separately on Modal as a class-based GPU service exposing `generate_podcast`.
+- **Frontend** (`app.py` + `static/`): FastAPI app serving a hand-built static UI (`index.html`/`app.js`/`styles.css`), script generation via HF Inference API (Qwen2.5-Coder-32B), script parsing, and a `/api/generate` SSE endpoint that streams live progress from Modal.
+- **Backend** (`backend_modal/modal_runner.py`): deployed separately on Modal as a class-based GPU service exposing `generate_podcast`. The VibeVoice model code and voice reference WAVs under `backend_modal/` are gitignored; see Running locally.
 
 ---
 
@@ -159,8 +160,10 @@ Required env:
 
 ```
 .
-├── app.py                # Gradio frontend + script generation
-├── requirements.txt      # gradio, modal, huggingface_hub
+├── app.py                # FastAPI frontend + script generation
+├── Dockerfile             # HF Docker Space image
+├── static/                # Hand-built UI (index.html, app.js, styles.css)
+├── requirements.txt      # fastapi, uvicorn, modal, huggingface_hub, numpy, scipy
 ├── public/
 │   ├── images/              # Banner, architecture diagram, screenshots
 │   ├── voices/              # Voice reference clips (Cherry, Chicago, ...)
@@ -177,6 +180,6 @@ Required env:
 - **[VibeVoice](https://github.com/microsoft/VibeVoice)** — Microsoft Research's long-form multi-speaker TTS model
 - **[Qwen2.5-Coder-32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct)** — script generation
 - **[Modal](https://modal.com)** — GPU compute for inference
-- **[Gradio](https://gradio.app)** + **[Hugging Face Spaces](https://huggingface.co/spaces)** — frontend hosting
+- **[FastAPI](https://fastapi.tiangolo.com)** + **[Hugging Face Spaces](https://huggingface.co/spaces)** (Docker SDK) — frontend hosting
 
 ---

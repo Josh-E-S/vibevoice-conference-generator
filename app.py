@@ -1,11 +1,28 @@
+from __future__ import annotations
+
+import asyncio
+import io
+import json
 import os
 import re
-import gradio as gr
-import modal
+import threading
+import time
 import traceback
+import uuid
+from pathlib import Path
+from typing import Annotated
+
+import modal
+import numpy as np
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from huggingface_hub import InferenceClient
+from pydantic import BaseModel
+from scipy.io import wavfile
 
 # --- Configuration ---
+ROOT = Path(__file__).resolve().parent
 MODAL_STUB_NAME = "vibevoice-generator"
 MODAL_CLASS_NAME = "VibeVoiceModel"
 
@@ -15,29 +32,24 @@ VOICE_GENDERS = {
     "Mantis": "F", "Sponge": "M", "Starchild": "F",
 }
 AVAILABLE_VOICES = list(VOICE_GENDERS.keys())
-VOICE_DISPLAY = [f"{name} ({g})" for name, g in VOICE_GENDERS.items()]
-DEFAULT_SPEAKERS_DISPLAY = ["Cherry (F)", "Chicago (M)", "Janus (M)", "Mantis (F)"]
-
-
-def voice_display_to_name(display: str) -> str:
-    """Strip gender tag: 'Cherry (F)' -> 'Cherry'"""
-    if display and " (" in display:
-        return display.rsplit(" (", 1)[0]
-    return display
+DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
 
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 SCRIPT_MAX_WORDS = 1000           # AI generation cap
-MAX_SCRIPT_WORDS = 1500           # Hard limit for audio generation (~10 min)
+MAX_SCRIPT_WORDS = 100000         # Effectively uncapped (2026-08-14, Josh) — backend chunking has no
+                                   # real ceiling; the old 20,000 cap was a leftover UI guess that
+                                   # blocked genuine long-form renders below the backend's actual limit
 MAX_TURNS = 50                    # Max conversation turns
+AUDIO_TTL_SECONDS = 900
 
 
 # --- Load example scripts ---
 def load_example_scripts():
-    examples_dir = "text_examples"
+    examples_dir = ROOT / "text_examples"
     example_scripts = []
     example_scripts_natural = []
 
-    if not os.path.exists(examples_dir):
+    if not examples_dir.exists():
         return example_scripts, example_scripts_natural
 
     original_files = [
@@ -52,27 +64,28 @@ def load_example_scripts():
     ]
 
     for txt_file in original_files:
-        file_path = os.path.join(examples_dir, txt_file)
-        natural_file = txt_file.replace(".txt", "_natural.txt")
-        natural_path = os.path.join(examples_dir, natural_file)
+        file_path = examples_dir / txt_file
+        natural_path = examples_dir / txt_file.replace(".txt", "_natural.txt")
 
-        if os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8") as f:
-                example_scripts.append(f.read())
+        if file_path.exists():
+            example_scripts.append(file_path.read_text(encoding="utf-8"))
         else:
             example_scripts.append("")
 
-        if os.path.exists(natural_path):
-            with open(natural_path, "r", encoding="utf-8") as f:
-                example_scripts_natural.append(f.read())
+        if natural_path.exists():
+            example_scripts_natural.append(natural_path.read_text(encoding="utf-8"))
         else:
-            example_scripts_natural.append(
-                example_scripts[-1] if example_scripts else ""
-            )
+            example_scripts_natural.append(example_scripts[-1] if example_scripts else "")
 
     return example_scripts, example_scripts_natural
 
 
+EXAMPLE_NAMES = [
+    "AI TED Talk", "Political Speech",
+    "Finance IPO", "Telehealth",
+    "Military Briefing", "Oil & Energy",
+    "Game Dev Meeting", "Product Review",
+]
 SCRIPT_SPEAKER_COUNTS = [1, 1, 2, 2, 3, 3, 4, 4]
 EXAMPLE_SCRIPTS, EXAMPLE_SCRIPTS_NATURAL = load_example_scripts()
 
@@ -178,16 +191,6 @@ def turns_to_script(turns: list[dict]) -> str:
         if t.get("text", "").strip():
             lines.append(f"Speaker {t['speaker']}: {t['text'].strip()}")
     return "\n\n".join(lines)
-
-
-def estimate_duration(turns: list[dict]) -> str:
-    total_words = sum(len(t.get("text", "").split()) for t in turns)
-    if total_words == 0:
-        return ""
-    minutes = total_words / 150
-    if minutes < 1:
-        return f"~{int(minutes * 60)}s"
-    return f"~{minutes:.1f}m"
 
 
 # --- AI Script Generation ---
@@ -309,15 +312,15 @@ def _extract_genders(raw: str) -> tuple[str, dict[int, str]]:
     return cleaned, genders
 
 
-def assign_voices_by_gender(genders: dict[int, str], num_speakers: int) -> list[str]:
-    """Return a list of 4 voice-display strings, picking matching-gender voices without duplicates.
+def assign_voices_by_gender(genders: dict[int, str], num_speakers: int) -> list[str | None]:
+    """Return a list of 4 plain voice names, picking matching-gender voices without duplicates.
 
-    Falls back to DEFAULT_SPEAKERS_DISPLAY if no gender info for a slot.
+    Falls back to DEFAULT_SPEAKERS if no gender info for a slot.
     """
     female_pool = [v for v in AVAILABLE_VOICES if VOICE_GENDERS.get(v) == "F"]
     male_pool = [v for v in AVAILABLE_VOICES if VOICE_GENDERS.get(v) == "M"]
     used: set[str] = set()
-    chosen: list[str] = []
+    chosen: list[str | None] = []
 
     for i in range(4):
         slot = i + 1
@@ -326,16 +329,15 @@ def assign_voices_by_gender(genders: dict[int, str], num_speakers: int) -> list[
             pool = female_pool if g == "F" else (male_pool if g == "M" else AVAILABLE_VOICES)
             pick = next((v for v in pool if v not in used), None)
             if pick is None:
-                # exhausted preferred pool — fall back to any unused voice
                 pick = next((v for v in AVAILABLE_VOICES if v not in used), AVAILABLE_VOICES[0])
             used.add(pick)
-            chosen.append(f"{pick} ({VOICE_GENDERS.get(pick, '?')})")
+            chosen.append(pick)
         else:
-            chosen.append(DEFAULT_SPEAKERS_DISPLAY[i] if i < len(DEFAULT_SPEAKERS_DISPLAY) else None)
+            chosen.append(DEFAULT_SPEAKERS[i] if i < len(DEFAULT_SPEAKERS) else None)
     return chosen
 
 
-def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str, list[str]]:
+def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str, list[str | None]]:
     """Returns (turns, num_speakers, title, voice_selections)."""
     system = SCRIPT_SYSTEM_PROMPT.format(max_words=SCRIPT_MAX_WORDS)
     response = llm_client.chat_completion(
@@ -408,6 +410,24 @@ def generate_parody_story(prompt: str) -> list[str]:
         return ["Generating your audio... hang tight!"]
 
 
+# --- Precomputed example index (parsed once at startup) ---
+def _build_examples_index() -> list[dict]:
+    index = []
+    for i, name in enumerate(EXAMPLE_NAMES):
+        script = EXAMPLE_SCRIPTS_NATURAL[i] if i < len(EXAMPLE_SCRIPTS_NATURAL) else ""
+        turns = parse_script_to_turns(script)
+        num = SCRIPT_SPEAKER_COUNTS[i] if i < len(SCRIPT_SPEAKER_COUNTS) else 1
+        voices = (AVAILABLE_VOICES[:num] + [None, None, None, None])[:4]
+        index.append({
+            "id": i, "title": name, "turns": turns,
+            "num_speakers": num, "voices": voices,
+        })
+    return index
+
+
+EXAMPLES_INDEX = _build_examples_index()
+
+
 # --- Modal Connection ---
 try:
     RemoteVibeVoiceModel = modal.Cls.from_name(MODAL_STUB_NAME, MODAL_CLASS_NAME)
@@ -420,834 +440,237 @@ except modal.exception.NotFoundError:
     remote_generate_function = None
 
 
-# --- Theme & CSS ---
-theme = gr.themes.Ocean(
-    primary_hue="indigo",
-    secondary_hue="fuchsia",
-    neutral_hue="slate",
-).set(button_large_radius="*radius_sm")
+def _encode_wav(sample_rate: int, audio: np.ndarray) -> bytes:
+    audio = np.asarray(audio)
+    if audio.dtype.kind == "f":
+        audio = np.clip(audio, -1.0, 1.0)
+        audio = (audio * 32767).astype(np.int16)
+    elif audio.dtype != np.int16:
+        audio = audio.astype(np.int16)
+    buf = io.BytesIO()
+    wavfile.write(buf, sample_rate, audio)
+    return buf.getvalue()
 
-SPEAKER_COLORS = ["#6366f1", "#ec4899", "#22c55e", "#f59e0b"]
 
-CUSTOM_CSS = """
-/* ---- Conversation scroll container ---- */
-.conversation-scroll {
-    max-height: 480px;
-    overflow-y: auto;
-    border: 1px solid var(--border-color-primary);
-    border-radius: 10px;
-    padding: 10px;
-    background: var(--background-fill-secondary);
-}
-.conversation-scroll::-webkit-scrollbar { width: 6px; }
-.conversation-scroll::-webkit-scrollbar-thumb {
-    background: var(--border-color-primary);
-    border-radius: 3px;
-}
+AUDIO_STORE: dict[str, tuple[float, bytes]] = {}
 
-/* ---- Speaker color bars ---- */
-""" + "\n".join(f"""
-.speaker-{i+1} {{
-    border-left: 4px solid {c} !important;
-    padding-left: 10px !important;
-    margin-bottom: 6px !important;
-    border-radius: 8px !important;
-    background: {c}08 !important;
-}}""" for i, c in enumerate(SPEAKER_COLORS)) + """
 
-/* ---- Voice settings row ---- */
-.voice-row {
-    border: 1px solid var(--border-color-primary);
-    border-radius: 10px;
-    padding: 12px 16px;
-    background: var(--background-fill-secondary);
-}
+def _prune_audio_store() -> None:
+    now = time.time()
+    stale = [k for k, (ts, _) in AUDIO_STORE.items() if now - ts > AUDIO_TTL_SECONDS]
+    for k in stale:
+        AUDIO_STORE.pop(k, None)
 
-/* ---- Example pill buttons ---- */
-.example-btn button {
-    border-radius: 20px !important;
-    font-size: 0.85em !important;
-}
 
-/* ---- CTA buttons ---- */
-.cta-btn button {
-    border-radius: 10px !important;
-    font-size: 1.1em !important;
-    padding: 14px 24px !important;
-    letter-spacing: 0.02em;
-}
+# ========================================================
+# FASTAPI APP
+# ========================================================
 
-/* ---- Status text (inline, no chrome) ---- */
-.status-text {
-    font-style: italic;
-    opacity: 0.8;
-    padding: 8px 0;
-    min-height: 0 !important;
-}
+app = FastAPI(title="VibeVoice Conference Generator")
+app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.mount("/public", StaticFiles(directory=ROOT / "public"), name="public")
 
-/* ---- Empty state ---- */
-.empty-state {
-    text-align: center;
-    padding: 48px 20px !important;
-    opacity: 0.6;
-}
 
-/* ---- Generation status banner ---- */
-.gen-status {
-    border-radius: 12px;
-    padding: 18px 24px;
-    margin-top: 10px;
-    text-align: center;
-    font-size: 1.05em;
-    min-height: 0;
-}
-.gen-status-active {
-    border: 2px solid #6366f1;
-    background: linear-gradient(
-        90deg,
-        rgba(99, 102, 241, 0.05) 0%,
-        rgba(99, 102, 241, 0.18) 30%,
-        rgba(236, 72, 153, 0.14) 50%,
-        rgba(99, 102, 241, 0.18) 70%,
-        rgba(99, 102, 241, 0.05) 100%
-    );
-    background-size: 300% 100%;
-    animation: gradient-sweep 2.5s ease-in-out infinite, border-glow 2s ease-in-out infinite;
-    box-shadow: 0 0 15px rgba(99, 102, 241, 0.15), 0 0 30px rgba(99, 102, 241, 0.05);
-}
-@keyframes gradient-sweep {
-    0% { background-position: 100% 0; }
-    50% { background-position: 0% 0; }
-    100% { background-position: 100% 0; }
-}
-@keyframes border-glow {
-    0%, 100% {
-        border-color: #6366f1;
-        box-shadow: 0 0 15px rgba(99, 102, 241, 0.15), 0 0 30px rgba(99, 102, 241, 0.05);
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    return FileResponse(ROOT / "static" / "index.html")
+
+
+@app.get("/api/status")
+async def api_status() -> dict:
+    return {"backend": "ready" if remote_generate_function is not None else "offline"}
+
+
+@app.get("/api/models")
+async def api_models() -> list[str]:
+    return AVAILABLE_MODELS
+
+
+@app.get("/api/voices")
+async def api_voices() -> list[dict]:
+    return [
+        {"name": name, "gender": VOICE_GENDERS[name], "preview_url": f"/public/voices/{name}.mp3"}
+        for name in AVAILABLE_VOICES
+    ]
+
+
+@app.get("/api/examples")
+async def api_examples() -> list[dict]:
+    return EXAMPLES_INDEX
+
+
+@app.post("/api/parse-script")
+async def api_parse_script(
+    text: Annotated[str, Form()] = "",
+    file: Annotated[UploadFile | None, File()] = None,
+) -> dict:
+    script = ""
+    if file is not None and file.filename:
+        raw = await file.read()
+        script = raw.decode("utf-8", errors="replace")
+        await file.close()
+    if not script.strip():
+        script = text or ""
+    if not script.strip():
+        raise HTTPException(status_code=400, detail="Paste a script or upload a .txt file first.")
+
+    turns = parse_script_to_turns(script)
+    if not turns:
+        raise HTTPException(status_code=400, detail="Couldn't find any dialogue in that script.")
+
+    total_words = sum(len(t["text"].split()) for t in turns)
+    num = max(1, min(4, max(t["speaker"] for t in turns)))
+    voices = (AVAILABLE_VOICES[:num] + [None, None, None, None])[:4]
+
+    return {
+        "turns": turns,
+        "num_speakers": num,
+        "title": "Uploaded Script",
+        "voices": voices,
+        "word_count": total_words,
+        "over_limit": total_words > MAX_SCRIPT_WORDS,
     }
-    33% {
-        border-color: #ec4899;
-        box-shadow: 0 0 15px rgba(236, 72, 153, 0.2), 0 0 30px rgba(236, 72, 153, 0.08);
-    }
-    66% {
-        border-color: #22c55e;
-        box-shadow: 0 0 15px rgba(34, 197, 94, 0.2), 0 0 30px rgba(34, 197, 94, 0.08);
-    }
-}
-"""
 
 
-# --- Status helpers ---
-AUDIO_LABEL_DEFAULT = "Generated Audio"
-PRIMARY_STAGE_MESSAGES = {
-    "connecting": ("Submitted", "Provisioning GPU resources... cold starts can take up to a minute."),
-    "queued": ("Queued", "Worker is spinning up. Cold starts may take 30-60 seconds."),
-    "loading_model": ("Loading Model", "Streaming VibeVoice weights to the GPU."),
-    "loading_voices": ("Loading Voices", None),
-    "preparing_inputs": ("Preparing", "Formatting the conversation for the model."),
-    "generating_audio": ("Generating", "Synthesizing speech — this is the longest step."),
-    "processing_audio": ("Finalizing", "Converting tensors into a playable waveform."),
-    "complete": ("Complete", "Press play below or download your audio."),
-    "error": ("Error", "Check the log for details."),
-}
-AUDIO_STAGE_LABELS = {
-    "connecting": "Audio (requesting GPU...)",
-    "queued": "Audio (GPU warming up...)",
-    "loading_model": "Audio (loading model...)",
-    "loading_voices": "Audio (loading voices...)",
-    "preparing_inputs": "Audio (preparing...)",
-    "generating_audio": "Audio (generating...)",
-    "processing_audio": "Audio (finalizing...)",
-    "error": "Audio (error)",
-}
+class ScriptPromptRequest(BaseModel):
+    prompt: str
 
 
-def build_status_html(stage: str, status_line: str) -> str:
-    """Build an HTML status banner for the generation progress."""
-    title, default_desc = PRIMARY_STAGE_MESSAGES.get(stage, ("Working", "Processing..."))
-    desc = status_line or default_desc or ""
+@app.post("/api/generate-script")
+async def api_generate_script(payload: ScriptPromptRequest) -> dict:
+    prompt = (payload.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Please enter a prompt.")
 
-    if stage == "complete":
-        icon = '<span style="color:#22c55e; font-size:1.4em; vertical-align:middle;">&#10003;</span>'
-        cls = "gen-status"
-    elif stage == "error":
-        icon = '<span style="color:#ef4444; font-size:1.4em; vertical-align:middle;">&#10007;</span>'
-        cls = "gen-status"
-    else:
-        # Pulsing animated dot
-        icon = (
-            '<span style="display:inline-block; width:12px; height:12px; '
-            'border-radius:50%; background:#6366f1; vertical-align:middle; '
-            'animation: dot-pulse 1.2s ease-in-out infinite;"></span>'
+    try:
+        script_result, parody_lines = await asyncio.gather(
+            asyncio.to_thread(generate_script_from_prompt, prompt),
+            asyncio.to_thread(generate_parody_story, prompt),
         )
-        cls = "gen-status gen-status-active"
+    except Exception as e:
+        print(f"Script generation error: {e}")
+        traceback.print_exc()
+        msg = str(e)
+        if "api_key" in msg or "log in" in msg or "token" in msg.lower():
+            raise HTTPException(status_code=502, detail="HF_TOKEN not configured. Add it in Space Settings.")
+        raise HTTPException(status_code=502, detail=f"Error: {msg[:200]}")
 
-    return (
-        f'<style>@keyframes dot-pulse {{ 0%,100% {{ opacity:1; transform:scale(1); }} 50% {{ opacity:0.4; transform:scale(0.7); }} }}</style>'
-        f'<div class="{cls}">'
-        f'{icon} <strong style="font-size:1.1em;">{title}</strong>'
-        f'<br><span style="opacity:0.7; font-size:0.9em;">{desc}</span>'
-        f'</div>'
+    turns, detected, title, voice_picks = script_result
+    if not turns:
+        raise HTTPException(status_code=422, detail="Empty result — try a more descriptive prompt.")
+
+    voices = list(voice_picks)[:4]
+    while len(voices) < 4:
+        voices.append(None)
+
+    return {
+        "turns": turns,
+        "num_speakers": detected,
+        "title": title,
+        "voices": voices,
+        "parody_lines": parody_lines,
+    }
+
+
+class GenerateRequest(BaseModel):
+    model: str
+    num_speakers: int
+    turns: list[dict]
+    speakers: list[str | None]
+    cfg_scale: float
+
+
+@app.post("/api/generate")
+async def api_generate(payload: GenerateRequest) -> StreamingResponse:
+    if remote_generate_function is None:
+        raise HTTPException(status_code=503, detail="Modal backend is offline.")
+
+    script = turns_to_script(payload.turns)
+    if not script.strip():
+        raise HTTPException(status_code=400, detail="Add dialogue before generating.")
+
+    word_count = len(script.split())
+    if word_count > MAX_SCRIPT_WORDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Script too long: {word_count} words (max {MAX_SCRIPT_WORDS}). Shorten some turns.",
+        )
+
+    speakers = (list(payload.speakers) + [None, None, None, None])[:4]
+
+    async def event_stream():
+        _prune_audio_store()
+        loop = asyncio.get_event_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        sentinel = object()
+
+        def worker():
+            try:
+                for update in remote_generate_function.remote_gen(
+                    num_speakers=payload.num_speakers,
+                    script=script,
+                    speaker_1=speakers[0],
+                    speaker_2=speakers[1],
+                    speaker_3=speakers[2],
+                    speaker_4=speakers[3],
+                    cfg_scale=payload.cfg_scale,
+                    model_name=payload.model,
+                ):
+                    loop.call_soon_threadsafe(q.put_nowait, update)
+            except Exception as e:
+                loop.call_soon_threadsafe(q.put_nowait, {
+                    "stage": "error",
+                    "status": "Inference failed.",
+                    "log": f"{e}\n\n{traceback.format_exc()}",
+                })
+            finally:
+                loop.call_soon_threadsafe(q.put_nowait, sentinel)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        while True:
+            item = await q.get()
+            if item is sentinel:
+                break
+            if not item:
+                yield ": keep-alive\n\n"
+                continue
+
+            event = dict(item)
+            audio_payload = event.pop("audio", None)
+            if audio_payload is not None:
+                sample_rate, audio_array = audio_payload
+                wav_bytes = _encode_wav(sample_rate, audio_array)
+                audio_id = uuid.uuid4().hex
+                AUDIO_STORE[audio_id] = (time.time(), wav_bytes)
+                event["audio_id"] = audio_id
+                event["audio_duration"] = len(audio_array) / float(sample_rate)
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/audio/{audio_id}")
+async def api_audio(audio_id: str) -> Response:
+    entry = AUDIO_STORE.get(audio_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Audio not found or expired.")
+    _, wav_bytes = entry
+    return Response(
+        content=wav_bytes,
+        media_type="audio/wav",
+        headers={"Content-Disposition": 'attachment; filename="conference.wav"'},
     )
 
 
-# ========================================================
-# BUILD INTERFACE
-# ========================================================
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "healthy" if remote_generate_function is not None else "backend offline"}
 
-def create_demo_interface():
-    with gr.Blocks(
-        title="VibeVoice - Conference Generator",
-        theme=theme,
-        css=CUSTOM_CSS,
-    ) as interface:
 
-        # --- State ---
-        turns_state = gr.State([])
-        script_title_state = gr.State("")
-        parody_lines_state = gr.State([])  # funny loading story for audio generation
-        # Current voice selection per speaker slot (list of 4 display strings like "Cherry (F)")
-        voice_selections_state = gr.State(list(DEFAULT_SPEAKERS_DISPLAY))
-
-        # ---- BANNER ----
-        gr.HTML("""
-        <div style="width:100%; margin-bottom:12px;">
-            <img src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/banner.png"
-                 style="width:100%; height:auto; border-radius:14px; box-shadow:0 8px 32px rgba(0,0,0,0.25);"
-                 alt="VibeVoice Banner">
-        </div>
-        """)
-
-        with gr.Tabs():
-            # ==================== GENERATE TAB ====================
-            with gr.Tab("Generate"):
-
-                # ---- STEP 1: DESCRIBE ----
-                gr.HTML("""
-                <p style="margin:0 0 4px 0; opacity:0.65; font-size:0.9em;">
-                    Describe any scenario and AI writes the script. Then edit, assign voices, and generate audio.
-                </p>
-                """)
-                script_prompt = gr.Textbox(
-                    label="Describe your conversation",
-                    placeholder="A wizard and an orc debating battle strategy before a siege...",
-                    lines=2,
-                    max_lines=3,
-                )
-                generate_script_btn = gr.Button(
-                    "Write Script with AI", variant="primary",
-                    size="lg", elem_classes="cta-btn",
-                )
-                script_gen_status = gr.HTML(value="", elem_classes="status-text")
-
-                # ---- EXAMPLES ----
-                example_names = [
-                    "AI TED Talk", "Political Speech",
-                    "Finance IPO", "Telehealth",
-                    "Military Briefing", "Oil & Energy",
-                    "Game Dev Meeting", "Product Review",
-                ]
-                with gr.Row():
-                    example_buttons = []
-                    for name in example_names:
-                        btn = gr.Button(name, size="sm", variant="secondary",
-                                        elem_classes="example-btn", min_width=80)
-                        example_buttons.append(btn)
-
-                # ---- STEP 2: SCRIPT EDITOR ----
-                with gr.Row():
-                    script_title_display = gr.HTML(value="<h3 style='margin:0'>Script</h3>")
-                    duration_display = gr.HTML(value="")
-
-                with gr.Column(elem_classes="conversation-scroll"):
-                    @gr.render(inputs=[turns_state, voice_selections_state])
-                    def render_turns(turns, voice_sels):
-                        if not turns:
-                            gr.Markdown(
-                                "Your conversation will appear here.\n\n"
-                                "Type a prompt above and click **Write Script with AI**, "
-                                "or pick an example to get started.",
-                                elem_classes="empty-state",
-                            )
-                            return
-
-                        # Build speaker choice labels from the CURRENT voice selections,
-                        # so changing a Voice dropdown below propagates to the tags above.
-                        speaker_choices = []
-                        for i in range(4):
-                            sel = voice_sels[i] if voice_sels and i < len(voice_sels) else None
-                            if sel:
-                                # sel looks like "Cherry (F)" — display directly
-                                speaker_choices.append(f"Speaker {i+1} - {sel}")
-                            else:
-                                speaker_choices.append(f"Speaker {i+1}")
-
-                        for idx, turn in enumerate(turns):
-                            spk_num = turn["speaker"]
-                            color_class = f"speaker-{spk_num}" if 1 <= spk_num <= 4 else "speaker-1"
-                            spk_value = speaker_choices[spk_num - 1] if 1 <= spk_num <= 4 else speaker_choices[0]
-
-                            with gr.Row(key=f"turn-{idx}", elem_classes=color_class):
-                                spk_dd = gr.Dropdown(
-                                    choices=speaker_choices,
-                                    value=spk_value,
-                                    label="",
-                                    scale=1, min_width=115,
-                                    container=False,
-                                    key=f"spk-{idx}",
-                                )
-                                txt = gr.Textbox(
-                                    value=turn["text"],
-                                    label="",
-                                    lines=2, max_lines=8,
-                                    scale=6,
-                                    container=False,
-                                    key=f"txt-{idx}",
-                                )
-                                del_btn = gr.Button(
-                                    "X", size="sm", variant="stop",
-                                    scale=0, min_width=36, key=f"del-{idx}",
-                                )
-
-                            def on_text_change(new_text, current_turns, i=idx):
-                                if i < len(current_turns):
-                                    current_turns[i]["text"] = new_text
-                                return current_turns
-
-                            txt.change(fn=on_text_change, inputs=[txt, turns_state],
-                                       outputs=[turns_state], queue=False)
-
-                            def on_speaker_change(new_spk, current_turns, i=idx):
-                                if i < len(current_turns):
-                                    # Parse "Speaker 2 - Chicago (M)" -> 2
-                                    m = re.match(r"Speaker (\d+)", new_spk)
-                                    if m:
-                                        current_turns[i]["speaker"] = int(m.group(1))
-                                return current_turns
-
-                            spk_dd.change(fn=on_speaker_change, inputs=[spk_dd, turns_state],
-                                          outputs=[turns_state], queue=False)
-
-                            def on_delete(current_turns, i=idx):
-                                if i < len(current_turns):
-                                    current_turns.pop(i)
-                                return current_turns
-
-                            del_btn.click(fn=on_delete, inputs=[turns_state],
-                                          outputs=[turns_state])
-
-                add_turn_btn = gr.Button("+ Add Turn", size="sm", variant="secondary")
-
-                # ---- STEP 3: VOICE & MODEL ----
-                num_speakers = gr.Slider(
-                    minimum=1, maximum=4, value=2, step=1, visible=False,
-                )
-
-                with gr.Group(elem_classes="voice-row"):
-                    with gr.Row():
-                        model_dropdown = gr.Dropdown(
-                            choices=AVAILABLE_MODELS,
-                            value=AVAILABLE_MODELS[0],
-                            label="Model",
-                            scale=1,
-                        )
-                        speaker_selections = []
-                        for i in range(4):
-                            s = gr.Dropdown(
-                                choices=VOICE_DISPLAY,
-                                value=DEFAULT_SPEAKERS_DISPLAY[i] if i < len(DEFAULT_SPEAKERS_DISPLAY) else None,
-                                label=f"Voice {i+1}",
-                                visible=(i < 2),
-                                scale=1,
-                            )
-                            speaker_selections.append(s)
-                    with gr.Row():
-                        cfg_scale = gr.Slider(
-                            minimum=1.0, maximum=2.0, value=2.0, step=0.05,
-                            label="CFG Scale",
-                        )
-
-                # ---- Voice preview ----
-                with gr.Accordion("🔊 Preview voices before generating", open=False):
-                    with gr.Row():
-                        preview_voice = gr.Dropdown(
-                            choices=VOICE_DISPLAY,
-                            value=VOICE_DISPLAY[0] if VOICE_DISPLAY else None,
-                            label="Pick a voice",
-                            scale=2,
-                        )
-                        preview_audio = gr.Audio(
-                            label="Sample",
-                            value=os.path.join("public", "voices", f"{AVAILABLE_VOICES[0]}.mp3") if AVAILABLE_VOICES else None,
-                            autoplay=False,
-                            show_download_button=False,
-                            scale=3,
-                        )
-
-                    def _load_preview(display: str):
-                        name = voice_display_to_name(display) if display else None
-                        if not name:
-                            return gr.update(value=None)
-                        path = os.path.join("public", "voices", f"{name}.mp3")
-                        if not os.path.exists(path):
-                            return gr.update(value=None)
-                        return gr.update(value=path)
-
-                    preview_voice.change(
-                        fn=_load_preview,
-                        inputs=[preview_voice],
-                        outputs=[preview_audio],
-                        queue=False,
-                    )
-
-                # ---- STEP 4: GENERATE ----
-                generate_btn = gr.Button(
-                    "Generate Conference Audio", size="lg", variant="primary",
-                    elem_classes="cta-btn",
-                )
-                primary_status = gr.HTML(value="", elem_classes="gen-status")
-
-                # ---- OUTPUT ----
-                complete_audio_output = gr.Audio(
-                    label=AUDIO_LABEL_DEFAULT,
-                    type="numpy",
-                    autoplay=False,
-                    show_download_button=True,
-                )
-                with gr.Accordion("Generation Log", open=False):
-                    log_output = gr.Textbox(
-                        label="Log", lines=8, max_lines=15, interactive=False,
-                    )
-
-                # ==================== EVENT HANDLERS ====================
-
-                def update_speaker_visibility(n):
-                    return [gr.update(visible=(i < n)) for i in range(4)]
-
-                num_speakers.change(
-                    fn=update_speaker_visibility,
-                    inputs=[num_speakers],
-                    outputs=speaker_selections,
-                )
-
-                # Two-way sync: when a Voice dropdown changes, update voice_selections_state
-                # so the script turn tags re-render with the new voice label.
-                def _sync_voice_state(*voices):
-                    return list(voices)
-
-                for sel in speaker_selections:
-                    sel.change(
-                        fn=_sync_voice_state,
-                        inputs=speaker_selections,
-                        outputs=[voice_selections_state],
-                        queue=False,
-                    )
-
-                def add_turn(turns):
-                    if len(turns) >= MAX_TURNS:
-                        gr.Warning(f"Maximum {MAX_TURNS} turns reached.")
-                        return turns, estimate_duration(turns)
-                    if not turns:
-                        next_speaker = 1
-                    else:
-                        max_spk = max(t["speaker"] for t in turns)
-                        last = turns[-1]["speaker"]
-                        next_speaker = (last % max_spk) + 1
-                    turns.append({"speaker": next_speaker, "text": ""})
-                    return turns, estimate_duration(turns)
-
-                add_turn_btn.click(
-                    fn=add_turn,
-                    inputs=[turns_state],
-                    outputs=[turns_state, duration_display],
-                )
-
-                turns_state.change(
-                    fn=lambda turns: estimate_duration(turns),
-                    inputs=[turns_state],
-                    outputs=[duration_display],
-                    queue=False,
-                )
-
-                # --- AI Script Generation ---
-                import time as _time
-                import threading as _threading
-
-                SCRIPT_GEN_MESSAGES = [
-                    "Writing script...",
-                    "Still generating...",
-                    "Making magic happen...",
-                    "Bossing around robot writers...",
-                    "Entering the matrix...",
-                    "Crafting dialogue...",
-                    "Teaching AI to be dramatic...",
-                    "Consulting the creative robots...",
-                    "Spilling digital ink...",
-                    "Herding AI cats into a script...",
-                    "Negotiating with the muse...",
-                    "Downloading inspiration...",
-                    "Warming up the plot engine...",
-                    "Shaking the idea tree...",
-                    "Feeding the word machine...",
-                    "Polishing virtual microphones...",
-                    "Rehearsing in the AI green room...",
-                    "Bribing the creativity daemon...",
-                    "Untangling narrative spaghetti...",
-                    "Summoning fictional characters...",
-                    "Tuning the dialogue generator...",
-                    "Spinning up the story factory...",
-                    "Convincing electrons to be eloquent...",
-                    "Wrangling syllables into sentences...",
-                    "Asking the AI to use its inside voice...",
-                    "Loading dramatic tension...",
-                    "Calibrating the sass levels...",
-                    "Assembling words in the right order...",
-                    "Generating witty banter...",
-                    "Overthinking your prompt (in a good way)...",
-                    "Running it by the robot editor...",
-                    "Adding a pinch of personality...",
-                    "Almost done, probably...",
-                    "Spell-checking the AI's homework...",
-                    "Giving characters their motivation...",
-                    "Practicing dramatic pauses...",
-                    "Reticulating splines (just kidding)...",
-                    "The AI is in the zone...",
-                    "Finalizing the masterpiece...",
-                    "One more revision, we promise...",
-                ]
-
-                # outputs: turns, duration, status, title, audio, script_btn, gen_btn, parody, num_speakers, *4 voices, voice_selections_state
-                def _script_no_change(status_html):
-                    return (gr.update(), gr.update(), status_html,
-                            gr.update(), gr.update(),
-                            gr.update(), gr.update(),
-                            gr.update(),
-                            gr.update(), *[gr.update()] * 4, gr.update())
-
-                def _script_buttons_busy(status_html):
-                    return (gr.update(), gr.update(), status_html,
-                            gr.update(), gr.update(),
-                            gr.update(interactive=False, value="Writing..."),
-                            gr.update(interactive=False),
-                            gr.update(),
-                            gr.update(), *[gr.update()] * 4, gr.update())
-
-                def _script_buttons_ready(status_html=""):
-                    return (gr.update(), gr.update(), status_html,
-                            gr.update(), gr.update(),
-                            gr.update(interactive=True, value="Write Script with AI"),
-                            gr.update(interactive=True),
-                            gr.update(),
-                            gr.update(), *[gr.update()] * 4, gr.update())
-
-                def _make_title_html(title):
-                    if title:
-                        return f"<h3 style='margin:0'>{title}</h3>"
-                    return "<h3 style='margin:0'>Script</h3>"
-
-                def on_generate_script(prompt):
-                    if not prompt or not prompt.strip():
-                        gr.Warning("Please enter a prompt.")
-                        yield _script_no_change("")
-                        return
-
-                    # Disable both buttons
-                    yield _script_buttons_busy(f"<em>{SCRIPT_GEN_MESSAGES[0]}</em>")
-
-                    # Run script + parody generation in threads
-                    result = {}
-                    error = {}
-                    parody_result = {"lines": []}
-
-                    def _run():
-                        try:
-                            result["data"] = generate_script_from_prompt(prompt.strip())
-                        except Exception as e:
-                            error["err"] = e
-
-                    def _run_parody():
-                        parody_result["lines"] = generate_parody_story(prompt.strip())
-
-                    thread = _threading.Thread(target=_run, daemon=True)
-                    parody_thread = _threading.Thread(target=_run_parody, daemon=True)
-                    thread.start()
-                    parody_thread.start()
-
-                    msg_idx = 1
-                    while thread.is_alive():
-                        _time.sleep(3)
-                        msg = SCRIPT_GEN_MESSAGES[msg_idx % len(SCRIPT_GEN_MESSAGES)]
-                        msg_idx += 1
-                        yield _script_buttons_busy(f"<em>{msg}</em>")
-
-                    thread.join()
-                    parody_thread.join()
-
-                    if "err" in error:
-                        e = error["err"]
-                        print(f"Script generation error: {e}")
-                        traceback.print_exc()
-                        msg = str(e)
-                        if "api_key" in msg or "log in" in msg or "token" in msg.lower():
-                            yield _script_buttons_ready("<em>HF_TOKEN not configured. Add it in Space Settings.</em>")
-                        else:
-                            yield _script_buttons_ready(f"<em>Error: {msg[:200]}</em>")
-                        return
-
-                    turns, detected, title, voice_picks = result["data"]
-                    if not turns:
-                        yield _script_buttons_ready("<em>Empty result — try a more descriptive prompt.</em>")
-                        return
-
-                    # voice_picks is a list of 4 display strings from assign_voices_by_gender
-                    voices = list(voice_picks)
-                    while len(voices) < 4:
-                        voices.append(None)
-
-                    # Strip "Speaker N - " style prefixes so the Voice dropdowns get clean values.
-                    # assign_voices_by_gender already returns display strings like "Cherry (F)".
-                    clean_voices = voices[:4]
-
-                    audio_label = title if title else AUDIO_LABEL_DEFAULT
-                    yield (turns, estimate_duration(turns), "",
-                           _make_title_html(title),
-                           gr.update(label=audio_label),
-                           gr.update(interactive=True, value="Write Script with AI"),
-                           gr.update(interactive=True),
-                           parody_result["lines"],
-                           detected, *clean_voices, clean_voices)
-
-                generate_script_btn.click(
-                    fn=on_generate_script,
-                    inputs=[script_prompt],
-                    outputs=[turns_state, duration_display, script_gen_status,
-                             script_title_display, complete_audio_output,
-                             generate_script_btn, generate_btn,
-                             parody_lines_state,
-                             num_speakers] + speaker_selections + [voice_selections_state],
-                )
-
-                # --- Load examples ---
-                def load_example(idx):
-                    if idx >= len(EXAMPLE_SCRIPTS):
-                        return [], 2, "", "<h3 style='margin:0'>Script</h3>", gr.update(), *[None] * 4, list(DEFAULT_SPEAKERS_DISPLAY)
-
-                    title = example_names[idx]
-                    script = EXAMPLE_SCRIPTS_NATURAL[idx]
-                    num = SCRIPT_SPEAKER_COUNTS[idx] if idx < len(SCRIPT_SPEAKER_COUNTS) else 1
-                    turns = parse_script_to_turns(script)
-
-                    voices = list(VOICE_DISPLAY[:num])
-                    while len(voices) < 4:
-                        voices.append(None)
-
-                    return (turns, num, estimate_duration(turns),
-                            f"<h3 style='margin:0'>{title}</h3>",
-                            gr.update(label=title),
-                            *voices[:4], voices[:4])
-
-                for idx, btn in enumerate(example_buttons):
-                    btn.click(
-                        fn=lambda i=idx: load_example(i),
-                        inputs=[],
-                        outputs=[turns_state, num_speakers, duration_display,
-                                 script_title_display, complete_audio_output]
-                                + speaker_selections + [voice_selections_state],
-                        queue=False,
-                    )
-
-                # --- Generate audio ---
-                def _gen_yield(status_html, btn_label, btn_interactive, audio_update, log_text):
-                    return (
-                        status_html,
-                        gr.update(value=btn_label, interactive=btn_interactive),
-                        gr.update(interactive=btn_interactive),
-                        audio_update,
-                        log_text,
-                    )
-
-                def generate_podcast_wrapper(
-                    model_choice, num_speakers_val, turns, parody_lines, *speakers_and_params
-                ):
-                    BTN_BUSY = "Generating..."
-                    BTN_READY = "Generate Conference Audio"
-
-                    # Set up parody line cycling
-                    parody_idx = [0]  # mutable counter
-                    def _next_parody():
-                        if not parody_lines:
-                            return None
-                        line = parody_lines[parody_idx[0] % len(parody_lines)]
-                        parody_idx[0] += 1
-                        return line
-
-                    if remote_generate_function is None:
-                        yield _gen_yield(
-                            build_status_html("error", "Modal backend is offline."),
-                            BTN_READY, True,
-                            gr.update(), "ERROR: Modal function not deployed.",
-                        )
-                        return
-
-                    script = turns_to_script(turns)
-                    if not script.strip():
-                        yield _gen_yield(
-                            build_status_html("error", "No script to generate."),
-                            BTN_READY, True,
-                            gr.update(), "Add dialogue before generating.",
-                        )
-                        return
-
-                    word_count = len(script.split())
-                    if word_count > MAX_SCRIPT_WORDS:
-                        yield _gen_yield(
-                            build_status_html("error",
-                                f"Script too long: {word_count} words (max {MAX_SCRIPT_WORDS}). "
-                                "Shorten some turns."),
-                            BTN_READY, True,
-                            gr.update(), f"Script has {word_count} words, max is {MAX_SCRIPT_WORDS}.",
-                        )
-                        return
-
-                    # Disable buttons, show connecting status
-                    first_line = _next_parody() or "Provisioning GPU resources..."
-                    yield _gen_yield(
-                        build_status_html("connecting", first_line),
-                        BTN_BUSY, False,
-                        gr.update(label=AUDIO_STAGE_LABELS.get("connecting", AUDIO_LABEL_DEFAULT)),
-                        "Requesting GPU on Modal.com...",
-                    )
-
-                    try:
-                        speakers = [voice_display_to_name(s) for s in speakers_and_params[:4]]
-                        cfg_scale_val = speakers_and_params[4]
-                        current_log = ""
-                        last_stage = "connecting"
-
-                        for update in remote_generate_function.remote_gen(
-                            num_speakers=int(num_speakers_val),
-                            script=script,
-                            speaker_1=speakers[0],
-                            speaker_2=speakers[1],
-                            speaker_3=speakers[2],
-                            speaker_4=speakers[3],
-                            cfg_scale=cfg_scale_val,
-                            model_name=model_choice,
-                        ):
-                            if not update:
-                                continue
-
-                            if isinstance(update, dict):
-                                audio_payload = update.get("audio")
-                                stage_key = update.get("stage", last_stage) or last_stage
-                                status_line = update.get("status") or "Processing..."
-                                current_log = update.get("log", current_log)
-
-                                audio_label = AUDIO_STAGE_LABELS.get(stage_key,
-                                    f"Audio ({stage_key.replace('_',' ')})")
-                                is_done = stage_key in ("complete", "error")
-                                if stage_key == "complete":
-                                    audio_label = AUDIO_LABEL_DEFAULT
-
-                                audio_update = gr.update(label=audio_label)
-                                if audio_payload is not None:
-                                    audio_update = gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT)
-
-                                # Use parody line for active stages, real status for done
-                                if is_done:
-                                    display_line = status_line
-                                else:
-                                    display_line = _next_parody() or status_line
-
-                                yield _gen_yield(
-                                    build_status_html(stage_key, display_line),
-                                    BTN_READY if is_done else BTN_BUSY,
-                                    is_done,
-                                    audio_update,
-                                    current_log,
-                                )
-                                last_stage = stage_key
-                            else:
-                                audio_payload, log_text = (
-                                    update if isinstance(update, (tuple, list)) else (None, str(update))
-                                )
-                                if log_text:
-                                    current_log = log_text
-                                if audio_payload is not None:
-                                    yield _gen_yield(
-                                        build_status_html("complete", "Ready."),
-                                        BTN_READY, True,
-                                        gr.update(value=audio_payload, label=AUDIO_LABEL_DEFAULT),
-                                        current_log,
-                                    )
-                                else:
-                                    display_line = _next_parody() or (
-                                        current_log.splitlines()[-1] if current_log else "Processing...")
-                                    yield _gen_yield(
-                                        build_status_html("generating_audio", display_line),
-                                        BTN_BUSY, False,
-                                        gr.update(), current_log,
-                                    )
-                    except Exception as e:
-                        tb = traceback.format_exc()
-                        print(f"Error calling Modal: {e}")
-                        yield _gen_yield(
-                            build_status_html("error", "Inference failed."),
-                            BTN_READY, True,
-                            gr.update(), f"Error: {e}\n\n{tb}",
-                        )
-
-                generate_btn.click(
-                    fn=generate_podcast_wrapper,
-                    inputs=[model_dropdown, num_speakers, turns_state, parody_lines_state] + speaker_selections + [cfg_scale],
-                    outputs=[primary_status, generate_btn, generate_script_btn, complete_audio_output, log_output],
-                )
-
-            # ==================== ARCHITECTURE TAB ====================
-            with gr.Tab("Architecture"):
-                gr.Markdown("## VibeVoice: A Frontier Open-Source Text-to-Speech Model")
-                gr.Markdown(
-                    """VibeVoice generates expressive, long-form, multi-speaker conversational audio from text.
-                It uses continuous speech tokenizers at an ultra-low 7.5 Hz frame rate and a next-token diffusion
-                framework to synthesize up to 90 minutes of speech with up to 4 distinct speakers."""
-                )
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("""
-### Key Features
-- **Multi-Speaker**: Up to 4 distinct voices
-- **Long-Form**: Up to 90 minutes of audio
-- **Natural Flow**: Turn-taking, interruptions, filler words
-- **Efficient**: 7.5 Hz tokenizers for low compute cost
-
-### Architecture
-1. **Continuous Speech Tokenizers** — Acoustic + Semantic at 7.5 Hz
-2. **Next-Token Diffusion** — LLM context + diffusion generation
-3. **Diffusion Head** — High-fidelity acoustic output
-
-### Models
-- **1.5B** — Fast inference, great for iteration
-- **7B** — Higher fidelity, longer generation time
-                        """)
-                    with gr.Column():
-                        gr.Image(value="public/images/diagram.jpg",
-                                 label="Architecture", show_download_button=False)
-                        gr.Image(value="public/images/chart.png",
-                                 label="Performance", show_download_button=False)
-
-    return interface
-
-
-# --- Main ---
 if __name__ == "__main__":
+    import uvicorn
+
     if remote_generate_function is None:
-        with gr.Blocks(theme=theme) as interface:
-            gr.Markdown("# Configuration Error")
-            gr.Markdown(
-                "Cannot connect to Modal backend. "
-                "Run `modal deploy backend_modal/modal_runner.py` and refresh."
-            )
-        interface.launch()
-    else:
-        interface = create_demo_interface()
-        interface.queue().launch(show_error=True)
+        print("WARNING: Modal function not deployed — run `modal deploy backend_modal/modal_runner.py`.")
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 7860)))

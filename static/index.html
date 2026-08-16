@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0d0d14" />
+    <meta
+      name="description"
+      content="Generate realistic multi-speaker conference calls, meetings, and podcasts from a single prompt, powered by VibeVoice."
+    />
+    <title>Conference Generator — VibeVoice</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/">
+          <span class="brand-mark">🎙️</span>
+          <span>Conference Generator</span>
+        </a>
+        <nav class="view-tabs" aria-label="View">
+          <button class="view-tab active" type="button" data-view="generate">Generate</button>
+          <button class="view-tab" type="button" data-view="architecture">Architecture</button>
+        </nav>
+        <div class="runtime-status" id="runtimeStatus" aria-live="polite">
+          <span class="status-dot"></span>
+          <span id="runtimeLabel">Connecting</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <img
+        class="banner"
+        src="https://huggingface.co/spaces/ACloudCenter/Conference-Generator-VibeVoice/resolve/main/public/images/banner.png"
+        alt="VibeVoice Conference Generator"
+      />
+
+      <section id="generate-view" class="visible">
+        <!-- STEP 1: DESCRIBE -->
+        <section class="step-card">
+          <div class="step-heading">
+            <div class="step-heading-left">
+              <span class="step-index">01</span>
+              <h2>Describe your conversation</h2>
+            </div>
+          </div>
+          <p class="field-hint" style="margin-top: -6px; margin-bottom: 12px;">
+            Describe any scenario and AI writes the script. Then edit, assign voices, and generate audio.
+          </p>
+          <div class="script-prompt-row">
+            <textarea
+              id="scriptPrompt"
+              rows="2"
+              placeholder="A wizard and an orc debating battle strategy before a siege..."
+            ></textarea>
+            <div class="row">
+              <button id="generateScriptBtn" class="btn btn-primary btn-cta" type="button" style="width: auto; flex: 1;">
+                Write Script with AI
+              </button>
+            </div>
+            <span id="scriptGenStatus" class="status-text"></span>
+          </div>
+
+          <div id="examplePills" class="row example-pills"></div>
+
+          <details class="accordion">
+            <summary>📋 Paste or upload a full script</summary>
+            <div class="accordion-body">
+              <p class="field-hint">
+                Bring your own script. Use <code>Speaker 1:</code> … <code>Speaker 4:</code> tags (one turn per
+                line). Untagged text becomes Speaker 1. Named characters (<code>Host:</code>, <code>Mom:</code>)
+                are auto-mapped to speaker slots.
+              </p>
+              <textarea
+                id="pastedScript"
+                rows="6"
+                placeholder="Speaker 1: Welcome to the show...&#10;Speaker 2: Thanks for having me..."
+              ></textarea>
+              <div class="row" style="margin-top: 10px;">
+                <input id="scriptFileUpload" type="file" accept=".txt,.md" style="flex: 1;" />
+                <button id="loadScriptBtn" class="btn btn-primary" type="button">Load Script</button>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <!-- STEP 2: SCRIPT EDITOR -->
+        <section class="step-card">
+          <div class="step-heading">
+            <div class="step-heading-left">
+              <span class="step-index">02</span>
+              <h2>Script editor</h2>
+            </div>
+          </div>
+          <div class="script-title-row">
+            <h3 id="scriptTitle">Script</h3>
+            <span id="scriptDuration" class="script-duration"></span>
+          </div>
+          <div id="turnsScroll" class="turns-scroll">
+            <div class="empty-turns" id="emptyTurns">
+              Your conversation will appear here.<br />
+              Type a prompt above and click <strong>Write Script with AI</strong>, or pick an example to get started.
+            </div>
+          </div>
+          <button id="addTurnBtn" class="btn btn-sm add-turn-btn" type="button">+ Add Turn</button>
+        </section>
+
+        <!-- STEP 3: VOICE & MODEL -->
+        <section class="step-card">
+          <div class="step-heading">
+            <div class="step-heading-left">
+              <span class="step-index">03</span>
+              <h2>Voice &amp; model</h2>
+            </div>
+          </div>
+          <div class="voice-grid">
+            <div>
+              <label class="field-label" for="modelSelect">Model</label>
+              <select id="modelSelect"></select>
+            </div>
+            <div class="voice-slot" data-slot="0">
+              <label class="field-label">Voice 1</label>
+              <select class="voice-select" data-index="0"></select>
+            </div>
+            <div class="voice-slot" data-slot="1">
+              <label class="field-label">Voice 2</label>
+              <select class="voice-select" data-index="1"></select>
+            </div>
+            <div class="voice-slot" data-slot="2" hidden>
+              <label class="field-label">Voice 3</label>
+              <select class="voice-select" data-index="2"></select>
+            </div>
+            <div class="voice-slot" data-slot="3" hidden>
+              <label class="field-label">Voice 4</label>
+              <select class="voice-select" data-index="3"></select>
+            </div>
+          </div>
+          <label class="field-label" for="cfgScale">CFG Scale</label>
+          <div class="slider-row">
+            <input id="cfgScale" type="range" min="1.0" max="2.0" step="0.05" value="2.0" />
+            <span id="cfgScaleValue" class="slider-value">2.00</span>
+          </div>
+
+          <details class="accordion">
+            <summary>🔊 Preview voices before generating</summary>
+            <div class="accordion-body preview-row">
+              <select id="previewVoiceSelect"></select>
+              <audio id="previewAudio" controls></audio>
+            </div>
+          </details>
+        </section>
+
+        <!-- STEP 4: GENERATE -->
+        <section class="step-card">
+          <div class="step-heading">
+            <div class="step-heading-left">
+              <span class="step-index">04</span>
+              <h2>Generate</h2>
+            </div>
+          </div>
+          <button id="generateBtn" class="btn btn-primary btn-cta" type="button">Generate Conference Audio</button>
+          <div id="primaryStatus" class="gen-status">
+            <div class="gen-status-title"><span class="dot"></span><span id="primaryStatusTitle">Working</span></div>
+            <div class="gen-status-desc" id="primaryStatusDesc"></div>
+          </div>
+
+          <div class="output-panel">
+            <div id="outputEmpty" class="output-empty">Your generated conference audio will appear here.</div>
+            <div id="outputResult" class="output-result">
+              <canvas id="resultWaveform" width="960" height="90"></canvas>
+              <audio id="resultAudio" controls></audio>
+              <div class="result-metrics">
+                <div><span>Generation</span><strong id="generationTime">--</strong></div>
+                <div><span>Audio</span><strong id="audioDuration">--</strong></div>
+                <div><span>Model</span><strong id="resultModel">--</strong></div>
+              </div>
+              <a id="downloadBtn" class="btn btn-sm" download="conference.wav">Download WAV</a>
+            </div>
+          </div>
+
+          <details class="accordion">
+            <summary>Generation log</summary>
+            <div class="accordion-body">
+              <div id="logBox" class="log-box"></div>
+            </div>
+          </details>
+        </section>
+      </section>
+
+      <section id="architecture-view">
+        <section class="step-card">
+          <h2 style="margin-top:0;">VibeVoice: A Frontier Open-Source Text-to-Speech Model</h2>
+          <p style="color: var(--text-dim);">
+            VibeVoice generates expressive, long-form, multi-speaker conversational audio from text. It uses
+            continuous speech tokenizers at an ultra-low 7.5&nbsp;Hz frame rate and a next-token diffusion
+            framework to synthesize up to 90 minutes of speech with up to 4 distinct speakers.
+          </p>
+          <div class="arch-grid">
+            <div>
+              <h3>Key features</h3>
+              <ul>
+                <li><strong>Multi-speaker</strong> — up to 4 distinct voices</li>
+                <li><strong>Long-form</strong> — up to 90 minutes of audio</li>
+                <li><strong>Natural flow</strong> — turn-taking, interruptions, filler words</li>
+                <li><strong>Efficient</strong> — 7.5&nbsp;Hz tokenizers for low compute cost</li>
+              </ul>
+              <h3>Architecture</h3>
+              <ul>
+                <li>Continuous speech tokenizers — acoustic + semantic at 7.5&nbsp;Hz</li>
+                <li>Next-token diffusion — LLM context + diffusion generation</li>
+                <li>Diffusion head — high-fidelity acoustic output</li>
+              </ul>
+              <h3>Models</h3>
+              <ul>
+                <li><strong>1.5B</strong> — fast inference, great for iteration</li>
+                <li><strong>7B</strong> — higher fidelity, longer generation time</li>
+              </ul>
+            </div>
+            <div>
+              <img src="/public/images/diagram.jpg" alt="VibeVoice architecture diagram" />
+              <img src="/public/images/chart.png" alt="VibeVoice benchmark chart" />
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <footer>
+      <span>Conference Generator — powered by VibeVoice</span>
+      <span>Runs speech synthesis on Modal GPU workers; script writing via Qwen2.5-Coder-32B.</span>
+    </footer>
+  </body>
+</html>
