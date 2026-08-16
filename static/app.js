@@ -41,7 +41,7 @@ const el = {};
 [
   "runtimeStatus", "runtimeLabel", "aboutBtn", "aboutDialog", "closeAboutBtn",
   "modelSelect", "speakerStepper", "voiceRows", "cfgScale", "cfgScaleValue",
-  "scriptPrompt", "generateScriptBtn", "examplePills", "openImportBtn", "scriptGenStatus",
+  "scriptPrompt", "durationSelect", "generateScriptBtn", "examplePills", "openImportBtn", "scriptGenStatus",
   "scriptTitle", "scriptDuration", "turnsList", "addTurnBtn",
   "generateBarMeta", "generateBtn",
   "statusCard", "statusTitle", "statusDesc",
@@ -331,7 +331,7 @@ el.generateScriptBtn.addEventListener("click", async () => {
     const res = await fetch("/api/generate-script", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, target_minutes: Number(el.durationSelect.value) }),
     });
     const payload = await res.json();
     if (!res.ok) throw new Error(payload.detail || "Script generation failed.");
@@ -495,16 +495,21 @@ el.generateBtn.addEventListener("click", async () => {
 
 /* ---------------- Init ---------------- */
 async function init() {
-  const [models, voices, examples] = await Promise.all([
+  const [models, voices, examples, durationOptions] = await Promise.all([
     fetch("/api/models").then((r) => r.json()),
     fetch("/api/voices").then((r) => r.json()),
     fetch("/api/examples").then((r) => r.json()),
+    fetch("/api/duration-options").then((r) => r.json()),
   ]);
   state.models = models;
   state.voices = voices;
   state.examples = examples;
   state.voiceSelections = voices.slice(0, 4).map((v) => v.name);
   while (state.voiceSelections.length < 4) state.voiceSelections.push(null);
+
+  el.durationSelect.innerHTML = durationOptions.map((m) => `<option value="${m}">${m} min</option>`).join("");
+  const defaultDuration = durationOptions.includes(2) ? 2 : durationOptions[0];
+  el.durationSelect.value = String(defaultDuration);
 
   renderSidebar();
   renderTurns();

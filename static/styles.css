@@ -214,7 +214,19 @@ input[type="range"] { flex: 1; accent-color: var(--accent); }
   box-shadow: var(--shadow);
   margin-bottom: 14px;
 }
-.composer-row { display: flex; gap: 10px; align-items: flex-end; }
+.composer-row { display: flex; gap: 10px; align-items: center; }
+.duration-select {
+  width: auto;
+  flex-shrink: 0;
+  background: var(--field);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 8px;
+  font-size: 0.82rem;
+  color: var(--ink-dim);
+  align-self: stretch;
+}
+.duration-select:focus { outline: none; border-color: var(--accent); }
 .composer textarea {
   flex: 1;
   border: 1px solid var(--border-strong);

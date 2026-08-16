@@ -35,12 +35,21 @@ AVAILABLE_VOICES = list(VOICE_GENDERS.keys())
 DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
 
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
-SCRIPT_MAX_WORDS = 1000           # AI generation cap
+WORDS_PER_MINUTE = 150             # Matches the pace assumed by the client's duration estimate
+DURATION_OPTIONS_MINUTES = [1, 2, 5, 10, 15, 20, 30, 45, 60]
+MAX_COMPLETION_TOKENS = 8192       # Good-faith ceiling for a single chat_completion call; the
+                                    # underlying provider may cap lower, in which case the longest
+                                    # duration options may come back shorter than requested
 MAX_SCRIPT_WORDS = 100000         # Effectively uncapped (2026-08-14, Josh) — backend chunking has no
                                    # real ceiling; the old 20,000 cap was a leftover UI guess that
                                    # blocked genuine long-form renders below the backend's actual limit
-MAX_TURNS = 50                    # Max conversation turns
+MAX_TURNS = 250                    # Hard ceiling regardless of target length (safety valve)
 AUDIO_TTL_SECONDS = 900
+
+
+def _turns_budget_for_words(target_words: int) -> int:
+    """How many turns a script of this length plausibly needs, given full-paragraph turns."""
+    return max(6, min(MAX_TURNS, round(target_words / 55)))
 
 
 # --- Load example scripts ---
@@ -232,7 +241,10 @@ FORMAT RULES:
 - Use EXACTLY this format for dialogue: "Speaker N: dialogue text" where N starts at 1
 - Each turn is separated by a blank line
 - Choose the right number of speakers for the scenario (1 to 4 max)
-- Keep the total script under {max_words} words
+- LENGTH TARGET: write approximately {target_words} words total — enough dialogue to fill
+  roughly {target_minutes} minute(s) of natural spoken audio. This is a target, not just a
+  ceiling: keep the conversation developing — new angles, follow-up questions, examples,
+  pushback — rather than wrapping up early. Do not stop far short of the target.
 - Output ONLY the title and script — no stage directions, no commentary, no preamble
 
 CRITICAL — ONE SPEAKER PER TURN:
@@ -337,15 +349,22 @@ def assign_voices_by_gender(genders: dict[int, str], num_speakers: int) -> list[
     return chosen
 
 
-def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str, list[str | None]]:
+def generate_script_from_prompt(
+    prompt: str, target_minutes: int = 2
+) -> tuple[list[dict], int, str, list[str | None]]:
     """Returns (turns, num_speakers, title, voice_selections)."""
-    system = SCRIPT_SYSTEM_PROMPT.format(max_words=SCRIPT_MAX_WORDS)
+    target_minutes = target_minutes if target_minutes in DURATION_OPTIONS_MINUTES else 2
+    target_words = target_minutes * WORDS_PER_MINUTE
+    turns_budget = _turns_budget_for_words(target_words)
+    completion_tokens = min(MAX_COMPLETION_TOKENS, int(target_words * 1.6) + 400)
+
+    system = SCRIPT_SYSTEM_PROMPT.format(target_words=target_words, target_minutes=target_minutes)
     response = llm_client.chat_completion(
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=4096,
+        max_tokens=completion_tokens,
         temperature=0.7,
     )
     raw = response.choices[0].message.content
@@ -367,9 +386,11 @@ def generate_script_from_prompt(prompt: str) -> tuple[list[dict], int, str, list
         for t in turns
     ]
     turns = [t for t in turns if t["text"].strip()]
-    turns = turns[:MAX_TURNS]
+    turns = turns[:turns_budget]
+    # Allow some overshoot past the target before trimming — the model runs long sometimes.
+    overshoot_ceiling = int(target_words * 1.3) + 100
     total_words = sum(len(t["text"].split()) for t in turns)
-    while total_words > MAX_SCRIPT_WORDS and turns:
+    while total_words > overshoot_ceiling and turns:
         turns.pop()
         total_words = sum(len(t["text"].split()) for t in turns)
     speaker_ids = {t["speaker"] for t in turns}
@@ -534,6 +555,12 @@ async def api_parse_script(
 
 class ScriptPromptRequest(BaseModel):
     prompt: str
+    target_minutes: int = 2
+
+
+@app.get("/api/duration-options")
+async def api_duration_options() -> list[int]:
+    return DURATION_OPTIONS_MINUTES
 
 
 @app.post("/api/generate-script")
@@ -541,10 +568,11 @@ async def api_generate_script(payload: ScriptPromptRequest) -> dict:
     prompt = (payload.prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Please enter a prompt.")
+    target_minutes = payload.target_minutes if payload.target_minutes in DURATION_OPTIONS_MINUTES else 2
 
     try:
         script_result, parody_lines = await asyncio.gather(
-            asyncio.to_thread(generate_script_from_prompt, prompt),
+            asyncio.to_thread(generate_script_from_prompt, prompt, target_minutes),
             asyncio.to_thread(generate_parody_story, prompt),
         )
     except Exception as e:
