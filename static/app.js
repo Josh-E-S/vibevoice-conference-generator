@@ -106,9 +106,13 @@ function playVoicePreview(name, button) {
   const voice = state.voices.find((v) => v.name === name);
   if (!voice) return;
   state.previewAudio.src = voice.preview_url;
-  state.previewAudio.play().catch(() => {});
   state.playingVoice = name;
   document.querySelectorAll(".voice-play").forEach((b) => b.classList.toggle("playing", b === button));
+  state.previewAudio.play().catch((err) => {
+    state.playingVoice = null;
+    document.querySelectorAll(".voice-play").forEach((b) => b.classList.remove("playing"));
+    console.error("Voice preview failed to play:", err);
+  });
 }
 state.previewAudio.addEventListener("ended", () => {
   state.playingVoice = null;
