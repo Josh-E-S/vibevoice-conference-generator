@@ -9,12 +9,13 @@ import threading
 import time
 import traceback
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Annotated
 
 import modal
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import InferenceClient
@@ -483,6 +484,39 @@ def _prune_audio_store() -> None:
         AUDIO_STORE.pop(k, None)
 
 
+# --- Abuse guardrails ---
+# In-memory, per-process — fine for a single-container Space, not a distributed rate limiter.
+# Both generation endpoints hit metered third-party billing (HF Inference, Modal GPU time),
+# so an unrestricted public endpoint is a direct route to running up someone else's bill.
+_RATE_LOG: dict[str, deque] = defaultdict(deque)
+SCRIPT_RATE_LIMIT = (5, 600)      # 5 script generations per 10 min per IP (hits paid HF inference)
+AUDIO_RATE_LIMIT = (3, 3600)      # 3 audio generations per hour per IP (hits paid Modal GPU time)
+GENERATION_CONCURRENCY = asyncio.Semaphore(2)  # at most 2 Modal generations in flight at once, globally
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_rate_limit(bucket: str, request: Request, limit: int, window_seconds: int) -> None:
+    key = f"{bucket}:{_client_ip(request)}"
+    now = time.time()
+    log = _RATE_LOG[key]
+    while log and now - log[0] > window_seconds:
+        log.popleft()
+    if len(log) >= limit:
+        retry_after = max(1, int(window_seconds - (now - log[0])))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit reached ({limit} per {window_seconds // 60} min). Try again in about {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    log.append(now)
+
+
 # ========================================================
 # FASTAPI APP
 # ========================================================
@@ -564,7 +598,8 @@ async def api_duration_options() -> list[int]:
 
 
 @app.post("/api/generate-script")
-async def api_generate_script(payload: ScriptPromptRequest) -> dict:
+async def api_generate_script(payload: ScriptPromptRequest, request: Request) -> dict:
+    _enforce_rate_limit("script", request, *SCRIPT_RATE_LIMIT)
     prompt = (payload.prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Please enter a prompt.")
@@ -617,7 +652,8 @@ class GenerateRequest(BaseModel):
 
 
 @app.post("/api/generate")
-async def api_generate(payload: GenerateRequest) -> StreamingResponse:
+async def api_generate(payload: GenerateRequest, request: Request) -> StreamingResponse:
+    _enforce_rate_limit("audio", request, *AUDIO_RATE_LIMIT)
     if remote_generate_function is None:
         raise HTTPException(status_code=503, detail="Modal backend is offline.")
 
@@ -636,52 +672,54 @@ async def api_generate(payload: GenerateRequest) -> StreamingResponse:
 
     async def event_stream():
         _prune_audio_store()
-        loop = asyncio.get_event_loop()
-        q: asyncio.Queue = asyncio.Queue()
-        sentinel = object()
 
-        def worker():
-            try:
-                for update in remote_generate_function.remote_gen(
-                    num_speakers=payload.num_speakers,
-                    script=script,
-                    speaker_1=speakers[0],
-                    speaker_2=speakers[1],
-                    speaker_3=speakers[2],
-                    speaker_4=speakers[3],
-                    cfg_scale=payload.cfg_scale,
-                    model_name=payload.model,
-                ):
-                    loop.call_soon_threadsafe(q.put_nowait, update)
-            except Exception as e:
-                loop.call_soon_threadsafe(q.put_nowait, {
-                    "stage": "error",
-                    "status": "Inference failed.",
-                    "log": f"{e}\n\n{traceback.format_exc()}",
-                })
-            finally:
-                loop.call_soon_threadsafe(q.put_nowait, sentinel)
+        async with GENERATION_CONCURRENCY:
+            loop = asyncio.get_event_loop()
+            q: asyncio.Queue = asyncio.Queue()
+            sentinel = object()
 
-        threading.Thread(target=worker, daemon=True).start()
+            def worker():
+                try:
+                    for update in remote_generate_function.remote_gen(
+                        num_speakers=payload.num_speakers,
+                        script=script,
+                        speaker_1=speakers[0],
+                        speaker_2=speakers[1],
+                        speaker_3=speakers[2],
+                        speaker_4=speakers[3],
+                        cfg_scale=payload.cfg_scale,
+                        model_name=payload.model,
+                    ):
+                        loop.call_soon_threadsafe(q.put_nowait, update)
+                except Exception as e:
+                    loop.call_soon_threadsafe(q.put_nowait, {
+                        "stage": "error",
+                        "status": "Inference failed.",
+                        "log": f"{e}\n\n{traceback.format_exc()}",
+                    })
+                finally:
+                    loop.call_soon_threadsafe(q.put_nowait, sentinel)
 
-        while True:
-            item = await q.get()
-            if item is sentinel:
-                break
-            if not item:
-                yield ": keep-alive\n\n"
-                continue
+            threading.Thread(target=worker, daemon=True).start()
 
-            event = dict(item)
-            audio_payload = event.pop("audio", None)
-            if audio_payload is not None:
-                sample_rate, audio_array = audio_payload
-                wav_bytes = _encode_wav(sample_rate, audio_array)
-                audio_id = uuid.uuid4().hex
-                AUDIO_STORE[audio_id] = (time.time(), wav_bytes)
-                event["audio_id"] = audio_id
-                event["audio_duration"] = len(audio_array) / float(sample_rate)
-            yield f"data: {json.dumps(event)}\n\n"
+            while True:
+                item = await q.get()
+                if item is sentinel:
+                    break
+                if not item:
+                    yield ": keep-alive\n\n"
+                    continue
+
+                event = dict(item)
+                audio_payload = event.pop("audio", None)
+                if audio_payload is not None:
+                    sample_rate, audio_array = audio_payload
+                    wav_bytes = _encode_wav(sample_rate, audio_array)
+                    audio_id = uuid.uuid4().hex
+                    AUDIO_STORE[audio_id] = (time.time(), wav_bytes)
+                    event["audio_id"] = audio_id
+                    event["audio_duration"] = len(audio_array) / float(sample_rate)
+                yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
