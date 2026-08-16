@@ -553,6 +553,14 @@ async def api_generate_script(payload: ScriptPromptRequest) -> dict:
         msg = str(e)
         if "api_key" in msg or "log in" in msg or "token" in msg.lower():
             raise HTTPException(status_code=502, detail="HF_TOKEN not configured. Add it in Space Settings.")
+        if "402" in msg or "Payment Required" in msg:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Hugging Face inference credits are exhausted for this account. "
+                    "Check huggingface.co/settings/billing or huggingface.co/settings/inference-providers."
+                ),
+            )
         raise HTTPException(status_code=502, detail=f"Error: {msg[:200]}")
 
     turns, detected, title, voice_picks = script_result
