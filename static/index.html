@@ -44,6 +44,12 @@
             <button type="button" data-count="4">4</button>
           </div>
           <div id="voiceRows"></div>
+          <div id="voiceConsentRow" class="voice-consent-row" hidden>
+            <label>
+              <input type="checkbox" id="voiceConsentCheckbox" />
+              I have the right to use each uploaded voice and will disclose this audio as synthetic.
+            </label>
+          </div>
         </div>
 
         <div class="side-section">
@@ -64,19 +70,24 @@
       <main class="pane canvas">
         <div class="canvas-inner">
           <div class="composer">
-            <div class="composer-row">
-              <textarea
-                id="scriptPrompt"
-                rows="4"
-                placeholder="Describe a scenario — a wizard and an orc debating battle strategy..."
-              ></textarea>
-              <select id="durationSelect" class="duration-select" aria-label="Target length"></select>
+            <textarea
+              id="scriptPrompt"
+              class="composer-input"
+              rows="3"
+              placeholder="Describe a scenario — a wizard and an orc debating battle strategy..."
+            ></textarea>
+            <div class="composer-toolbar">
+              <div class="composer-toolbar-left">
+                <select id="durationSelect" class="toolbar-select" aria-label="Target length"></select>
+                <button class="toolbar-btn" id="openImportBtn" type="button">
+                  <span aria-hidden="true">📋</span> Import script
+                </button>
+              </div>
               <button id="generateScriptBtn" class="btn btn-ink" type="button">Write with AI</button>
             </div>
-            <div class="example-chips" id="examplePills"></div>
-            <button class="chip-import" id="openImportBtn" type="button">or paste / upload a script &rarr;</button>
-            <div id="scriptGenStatus" class="transcript-meta" style="margin-top: 8px;"></div>
           </div>
+          <div class="example-chips" id="examplePills"></div>
+          <div id="scriptGenStatus" class="transcript-meta" style="margin: 6px 0 4px;"></div>
 
           <div class="transcript-header">
             <h2 id="scriptTitle">Untitled conversation</h2>

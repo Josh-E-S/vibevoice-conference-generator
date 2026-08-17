@@ -29,6 +29,7 @@ const state = {
   numSpeakers: 2,
   voices: [],
   voiceSelections: [null, null, null, null],
+  customVoiceFiles: [null, null, null, null],
   models: [],
   examples: [],
   parodyLines: [],
@@ -41,6 +42,7 @@ const el = {};
 [
   "runtimeStatus", "runtimeLabel", "aboutBtn", "aboutDialog", "closeAboutBtn",
   "modelSelect", "speakerStepper", "voiceRows", "cfgScale", "cfgScaleValue",
+  "voiceConsentRow", "voiceConsentCheckbox",
   "scriptPrompt", "durationSelect", "generateScriptBtn", "examplePills", "openImportBtn", "scriptGenStatus",
   "scriptTitle", "scriptDuration", "turnsList", "addTurnBtn",
   "generateBarMeta", "generateBtn",
@@ -120,6 +122,21 @@ state.previewAudio.addEventListener("ended", () => {
 });
 
 /* ---------------- Sidebar: model / speakers / voices ---------------- */
+const CUSTOM_VOICE_VALUE = "__custom__";
+const MAX_CUSTOM_AUDIO_BYTES = 15 * 1024 * 1024;
+
+function isCustomVoice(i) {
+  return state.voiceSelections[i] === CUSTOM_VOICE_VALUE;
+}
+
+function anyCustomVoiceActive() {
+  return Array.from({ length: state.numSpeakers }, (_, i) => i).some(isCustomVoice);
+}
+
+function updateVoiceConsentVisibility() {
+  el.voiceConsentRow.hidden = !anyCustomVoiceActive();
+}
+
 function renderSidebar() {
   el.modelSelect.innerHTML = state.models.map((m) => `<option value="${m}">${m}</option>`).join("");
 
@@ -137,12 +154,10 @@ function renderSidebar() {
     dot.style.background = `var(--speaker-${i + 1})`;
 
     const select = document.createElement("select");
-    select.innerHTML = state.voices.map((v) => `<option value="${v.name}">${v.name} (${v.gender})</option>`).join("");
+    select.innerHTML =
+      `<option value="${CUSTOM_VOICE_VALUE}">🎙️ Clone a voice…</option>` +
+      state.voices.map((v) => `<option value="${v.name}">${v.name} (${v.gender})</option>`).join("");
     if (state.voiceSelections[i]) select.value = state.voiceSelections[i];
-    select.addEventListener("change", () => {
-      state.voiceSelections[i] = select.value;
-      renderTurns();
-    });
 
     const playBtn = document.createElement("button");
     playBtn.type = "button";
@@ -150,11 +165,62 @@ function renderSidebar() {
     playBtn.textContent = "▶";
     playBtn.title = "Preview voice";
     playBtn.addEventListener("click", () => playVoicePreview(select.value, playBtn));
-    select.addEventListener("change", () => { playBtn.textContent = "▶"; });
+
+    select.addEventListener("change", () => {
+      state.voiceSelections[i] = select.value;
+      if (select.value !== CUSTOM_VOICE_VALUE) state.customVoiceFiles[i] = null;
+      playBtn.textContent = "▶";
+      renderSidebar();
+      renderTurns();
+    });
 
     row.append(dot, select, playBtn);
     el.voiceRows.append(row);
+
+    if (isCustomVoice(i)) {
+      playBtn.hidden = true;
+      const uploadRow = document.createElement("div");
+      uploadRow.className = "custom-voice-row";
+
+      const fileLabel = document.createElement("label");
+      fileLabel.className = "btn btn-sm upload-mini-btn";
+      fileLabel.textContent = state.customVoiceFiles[i] ? state.customVoiceFiles[i].name : "Choose audio file…";
+      const fileInput = document.createElement("input");
+      fileInput.type = "file";
+      fileInput.accept = "audio/*";
+      fileInput.hidden = true;
+      fileInput.addEventListener("change", () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+        if (file.size > MAX_CUSTOM_AUDIO_BYTES) {
+          alert(`That file is too large (max ${MAX_CUSTOM_AUDIO_BYTES / (1024 * 1024)} MB).`);
+          fileInput.value = "";
+          return;
+        }
+        state.customVoiceFiles[i] = file;
+        renderSidebar();
+      });
+      fileLabel.append(fileInput);
+      uploadRow.append(fileLabel);
+
+      if (state.customVoiceFiles[i]) {
+        const clearBtn = document.createElement("button");
+        clearBtn.type = "button";
+        clearBtn.className = "btn btn-sm btn-icon-only";
+        clearBtn.textContent = "✕";
+        clearBtn.title = "Remove file";
+        clearBtn.addEventListener("click", () => {
+          state.customVoiceFiles[i] = null;
+          renderSidebar();
+        });
+        uploadRow.append(clearBtn);
+      }
+
+      el.voiceRows.append(uploadRow);
+    }
   }
+
+  updateVoiceConsentVisibility();
 }
 
 el.speakerStepper.querySelectorAll("button").forEach((btn) => {
@@ -171,6 +237,7 @@ el.cfgScale.addEventListener("input", () => {
 /* ---------------- Turn editor ---------------- */
 function speakerChoiceLabel(i) {
   const sel = state.voiceSelections[i];
+  if (sel === CUSTOM_VOICE_VALUE) return `Speaker ${i + 1} · Custom voice`;
   return sel ? `Speaker ${i + 1} · ${sel} (${genderOf(sel)})` : `Speaker ${i + 1}`;
 }
 
@@ -413,10 +480,30 @@ el.logToggleBtn.addEventListener("click", () => {
 });
 
 /* ---------------- Generate ---------------- */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
 el.generateBtn.addEventListener("click", async () => {
   const script = state.turns.map((t) => (t.text || "").trim()).filter(Boolean).join(" ");
   if (!script) {
     alert("Add dialogue before generating.");
+    return;
+  }
+
+  for (let i = 0; i < state.numSpeakers; i += 1) {
+    if (isCustomVoice(i) && !state.customVoiceFiles[i]) {
+      alert(`Upload a voice clip for Speaker ${i + 1}, or pick a preset voice instead.`);
+      return;
+    }
+  }
+  if (anyCustomVoiceActive() && !el.voiceConsentCheckbox.checked) {
+    alert("Confirm you have the right to use each uploaded voice before generating.");
     return;
   }
 
@@ -431,12 +518,30 @@ el.generateBtn.addEventListener("click", async () => {
   const started = performance.now();
   setStatus("connecting", nextParodyLine() || "Provisioning GPU resources...");
 
+  let customAudio;
+  try {
+    customAudio = await Promise.all(
+      Array.from({ length: 4 }, (_, i) =>
+        i < state.numSpeakers && isCustomVoice(i) && state.customVoiceFiles[i]
+          ? fileToBase64(state.customVoiceFiles[i])
+          : Promise.resolve(null)
+      )
+    );
+  } catch (error) {
+    setStatus("error", error.message);
+    el.generateBtn.disabled = false;
+    el.generateBtn.textContent = "Generate Audio";
+    return;
+  }
+
   const payload = {
     model: el.modelSelect.value,
     num_speakers: state.numSpeakers,
     turns: state.turns,
-    speakers: state.voiceSelections,
+    speakers: state.voiceSelections.map((v) => (v === CUSTOM_VOICE_VALUE ? null : v)),
     cfg_scale: Number(el.cfgScale.value),
+    custom_audio: customAudio,
+    voice_consent: el.voiceConsentCheckbox.checked,
   };
 
   try {
