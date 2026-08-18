@@ -712,6 +712,14 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
             detail="Confirm you have the right to use each uploaded voice before generating.",
         )
 
+    # Only pass custom_audio kwargs when a clone is actually in use, so preset-voice
+    # generations still work against a deployed backend that predates the parameters.
+    custom_audio_kwargs = (
+        {f"custom_audio_{i + 1}": a for i, a in enumerate(custom_audio)}
+        if any(a is not None for a in custom_audio)
+        else {}
+    )
+
     async def event_stream():
         _prune_audio_store()
 
@@ -729,10 +737,7 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
                         speaker_2=speakers[1],
                         speaker_3=speakers[2],
                         speaker_4=speakers[3],
-                        custom_audio_1=custom_audio[0],
-                        custom_audio_2=custom_audio[1],
-                        custom_audio_3=custom_audio[2],
-                        custom_audio_4=custom_audio[3],
+                        **custom_audio_kwargs,
                         cfg_scale=payload.cfg_scale,
                         model_name=payload.model,
                     ):
