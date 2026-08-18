@@ -283,6 +283,50 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: 6px 0 2p
 }
 
 /* ---------------- Composer ---------------- */
+.composer-card:has(.composer-collapsed:not([hidden])) { padding: 14px 20px; }
+.composer-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+}
+.composer-collapsed .collapsed-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+.composer-collapsed .collapsed-summary {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.02rem;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-collapsed .collapsed-cta {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 6px 14px;
+  flex-shrink: 0;
+}
+.composer-collapsed:hover .collapsed-cta { background: var(--accent-soft); border-color: var(--accent); }
+#composerBody { animation: fadeIn 0.25s ease; }
+
 .composer {
   background: var(--paper);
   border: 1px solid var(--border-strong);
@@ -717,6 +761,46 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
   line-height: 1;
 }
 .dialog-close:hover { color: var(--ink); }
+
+/* Now Playing stage */
+.player-stage {
+  max-width: 680px;
+  border-radius: 24px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.player-stage::backdrop { background: rgba(42, 32, 22, 0.55); }
+.stage-body { padding: 36px 36px 30px; }
+.stage-eyebrow {
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+  margin-bottom: 22px;
+}
+.stage-play-row { display: flex; justify-content: center; margin-bottom: 18px; }
+.play-btn-lg { width: 68px; height: 68px; font-size: 1.3rem; }
+#stageWaveform { width: 100%; height: 80px; display: block; cursor: pointer; }
+.stage-time { margin: 6px 0 20px; text-align: center; }
+.stage-caption { text-align: center; padding: 0 10px; min-height: 120px; }
+.stage-dot {
+  width: 9px; height: 9px;
+  display: inline-block;
+  margin: 0 0 12px;
+  background: var(--accent);
+}
+.stage-line {
+  font-family: var(--font-serif);
+  font-size: 1.55rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+.stage-speaker { font-size: 0.76rem; color: var(--ink-faint); margin-top: 10px; }
+.stage-actions { display: flex; justify-content: center; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+.stage-transcript { margin: 20px 0 0; max-height: 260px; }
+.stage-transcript .sync-text { font-size: 0.88rem; }
+.btn-block { display: block; width: 100%; text-align: center; margin-bottom: 8px; }
 
 /* Voice library */
 .library-dialog { max-width: 780px; }

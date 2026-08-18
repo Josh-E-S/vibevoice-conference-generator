@@ -77,6 +77,12 @@
       <!-- CANVAS: script composer + transcript -->
       <main class="pane-col canvas">
         <div class="card composer-card">
+          <button class="composer-collapsed" id="composerCollapsedStrip" type="button" hidden>
+            <span class="collapsed-label">Scene</span>
+            <span class="collapsed-summary" id="collapsedSummary"></span>
+            <span class="collapsed-cta">Edit</span>
+          </button>
+          <div id="composerBody">
           <h2 class="card-heading">What's the scene?</h2>
           <div class="composer">
             <textarea
@@ -97,6 +103,7 @@
           </div>
           <div class="example-chips" id="examplePills"></div>
           <div id="scriptGenStatus" class="gen-status"></div>
+          </div>
         </div>
 
         <div class="card script-card">
@@ -147,6 +154,7 @@
             <div><span>Audio length</span> <strong id="audioDuration">--</strong></div>
             <div><span>Model</span> <strong id="resultModel">--</strong></div>
           </div>
+          <button id="openPlayerBtn" class="btn btn-accent btn-block" type="button">Open player</button>
           <a id="downloadBtn" class="btn btn-pill-outline" download="chorus-audio.wav">Download WAV</a>
           <audio id="resultAudio" hidden></audio>
         </div>
@@ -155,6 +163,29 @@
         <div class="log-box" id="logBox"></div>
       </aside>
     </div>
+
+    <!-- Now Playing stage -->
+    <dialog id="playerStage" class="player-stage">
+      <div class="stage-body">
+        <div class="stage-eyebrow">NOW PLAYING · <span id="stageTitle"></span></div>
+        <div class="stage-play-row">
+          <button id="stagePlayBtn" class="play-btn play-btn-lg" type="button" aria-label="Play">►</button>
+        </div>
+        <canvas id="stageWaveform" height="80"></canvas>
+        <div class="player-time stage-time" id="stageTime">0:00 / 0:00</div>
+        <div class="stage-caption">
+          <span class="sync-dot stage-dot" id="stageDot"></span>
+          <div class="stage-line" id="stageLine"></div>
+          <div class="stage-speaker" id="stageSpeaker"></div>
+        </div>
+        <div class="stage-actions">
+          <button class="btn btn-pill-outline" id="stageBackBtn" type="button">Back to editor</button>
+          <a class="btn btn-ink" id="stageDownloadBtn" download="chorus-audio.wav">Download WAV</a>
+          <button class="btn btn-pill-outline" id="stageScriptToggle" type="button">View full script</button>
+        </div>
+        <div class="synced-transcript stage-transcript" id="stageTranscript" hidden></div>
+      </div>
+    </dialog>
 
     <!-- Voice library dialog -->
     <dialog id="voiceLibraryDialog" class="library-dialog">

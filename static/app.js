@@ -46,6 +46,7 @@ const state = {
   librarySearch: "",
   libraryFilter: "all",
   resultTurns: [],       // snapshot of turns for the synced transcript
+  resultTitle: "",
   wavePeaks: null,
   activeSyncIndex: -1,
 };
@@ -60,7 +61,11 @@ const el = {};
   "generateBarMeta", "generateBtn",
   "statusCard", "statusTitle", "statusDesc",
   "dockEmpty", "resultBlock", "resultWaveform", "resultAudio",
-  "playBtn", "playerTime", "syncedTranscript",
+  "playBtn", "playerTime", "syncedTranscript", "openPlayerBtn",
+  "composerCollapsedStrip", "collapsedSummary", "composerBody",
+  "playerStage", "stageTitle", "stagePlayBtn", "stageWaveform", "stageTime",
+  "stageDot", "stageLine", "stageSpeaker", "stageBackBtn", "stageDownloadBtn",
+  "stageScriptToggle", "stageTranscript",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
   "logToggleBtn", "logBox",
   "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid",
@@ -489,6 +494,7 @@ function speakerChoiceLabel(i) {
 function renderTurns() {
   el.turnsList.innerHTML = "";
   if (!state.turns.length) {
+    setComposerCollapsed(false);
     const empty = document.createElement("div");
     empty.className = "empty-transcript";
     empty.id = "emptyTurns";
@@ -573,7 +579,17 @@ el.addTurnBtn.addEventListener("click", () => {
   renderTurns();
 });
 
-function loadScriptResult(result, titleFallback) {
+/* Collapse the composer to a one-line strip once a script exists; the editor
+   becomes the star. Clicking the strip (or emptying the script) expands it. */
+function setComposerCollapsed(collapsed, summary) {
+  el.composerBody.hidden = collapsed;
+  el.composerCollapsedStrip.hidden = !collapsed;
+  if (summary != null) el.collapsedSummary.textContent = summary;
+}
+
+el.composerCollapsedStrip.addEventListener("click", () => setComposerCollapsed(false));
+
+function loadScriptResult(result, titleFallback, summary) {
   state.turns = result.turns;
   state.numSpeakers = result.num_speakers;
   const voices = (result.voices || []).slice(0, 4);
@@ -582,6 +598,7 @@ function loadScriptResult(result, titleFallback) {
   el.scriptTitle.textContent = result.title || titleFallback || "Untitled conversation";
   renderCast();
   renderTurns();
+  setComposerCollapsed(true, summary || result.title || titleFallback || "");
   el.dockEmpty.hidden = false;
   el.resultBlock.classList.remove("visible");
   el.statusCard.classList.remove("visible");
@@ -595,7 +612,7 @@ function renderExamplePills() {
     btn.type = "button";
     btn.className = "chip";
     btn.textContent = example.title;
-    btn.addEventListener("click", () => loadScriptResult(example, example.title));
+    btn.addEventListener("click", () => loadScriptResult(example, example.title, `Example: ${example.title}`));
     el.examplePills.append(btn);
   });
 }
@@ -619,7 +636,7 @@ el.loadScriptBtn.addEventListener("click", async () => {
     if (payload.over_limit) {
       alert(`Script is ${payload.word_count} words; loading anyway — trim before generating.`);
     }
-    loadScriptResult(payload, "Uploaded script");
+    loadScriptResult(payload, "Uploaded script", "Imported script");
     el.importDialog.close();
     el.pastedScript.value = "";
     el.scriptFileUpload.value = "";
@@ -665,7 +682,7 @@ el.generateScriptBtn.addEventListener("click", async () => {
     if (!res.ok) throw new Error(payload.detail || "Script generation failed.");
     state.parodyLines = payload.parody_lines || [];
     state.parodyIndex = 0;
-    loadScriptResult(payload, "Untitled conversation");
+    loadScriptResult(payload, "Untitled conversation", `“${prompt}”`);
     el.scriptGenStatus.textContent = "";
   } catch (error) {
     el.scriptGenStatus.textContent = error.message;
@@ -702,7 +719,11 @@ async function decodeWavePeaks(url, blocks) {
 }
 
 function renderWave(progress) {
-  const canvas = el.resultWaveform;
+  drawWaveOn(el.resultWaveform, progress);
+  if (el.playerStage.open) drawWaveOn(el.stageWaveform, progress);
+}
+
+function drawWaveOn(canvas, progress) {
   const cssWidth = canvas.clientWidth || 240;
   const cssHeight = canvas.clientHeight || 44;
   const dpr = window.devicePixelRatio || 1;
@@ -734,36 +755,74 @@ function buildSyncedTranscript(snapshot) {
   state.resultTurns = snapshot.map((t, i) => {
     const startRatio = acc / total;
     acc += words[i];
-    return { ...t, startRatio, endRatio: acc / total };
+    const endRatio = acc / total;
+    // Sub-split the turn into sentences for the stage caption, so a long
+    // monologue advances line by line instead of dumping the whole turn.
+    const parts = t.text.split(/(?<=[.!?…])\s+/).filter(Boolean);
+    const partWords = parts.map((s) => s.split(/\s+/).filter(Boolean).length || 1);
+    const partTotal = partWords.reduce((a, b) => a + b, 0);
+    let partAcc = 0;
+    const sentences = parts.map((text, j) => {
+      const s = startRatio + (partAcc / partTotal) * (endRatio - startRatio);
+      partAcc += partWords[j];
+      const e = startRatio + (partAcc / partTotal) * (endRatio - startRatio);
+      return { text, startRatio: s, endRatio: e };
+    });
+    return { ...t, startRatio, endRatio, sentences };
   });
   state.activeSyncIndex = -1;
+  lastCaptionKey = "";
 
   el.syncedTranscript.innerHTML = "";
+  el.stageTranscript.innerHTML = "";
   state.resultTurns.forEach((turn, i) => {
-    const row = document.createElement("div");
-    row.className = "sync-line";
-    const dot = document.createElement("span");
-    dot.className = "sync-dot";
-    dot.style.background = slotColor(turn.speaker - 1);
-    const body = document.createElement("div");
-    const label = document.createElement("div");
-    label.className = "sync-label";
-    label.textContent = `Speaker ${turn.speaker} · ${slotVoiceLabel(turn.speaker - 1)}`;
-    const text = document.createElement("div");
-    text.className = "sync-text";
-    text.textContent = turn.text;
-    body.append(label, text);
-    row.append(dot, body);
-    row.addEventListener("click", () => {
-      const audio = el.resultAudio;
-      if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        audio.currentTime = turn.startRatio * audio.duration;
-        if (audio.paused) audio.play().catch(() => {});
-      }
+    state.resultTurns[i].rows = [el.syncedTranscript, el.stageTranscript].map((container) => {
+      const row = document.createElement("div");
+      row.className = "sync-line";
+      const dot = document.createElement("span");
+      dot.className = "sync-dot";
+      dot.style.background = slotColor(turn.speaker - 1);
+      const body = document.createElement("div");
+      const label = document.createElement("div");
+      label.className = "sync-label";
+      label.textContent = `Speaker ${turn.speaker} · ${slotVoiceLabel(turn.speaker - 1)}`;
+      const text = document.createElement("div");
+      text.className = "sync-text";
+      text.textContent = turn.text;
+      body.append(label, text);
+      row.append(dot, body);
+      row.addEventListener("click", () => {
+        const audio = el.resultAudio;
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          audio.currentTime = turn.startRatio * audio.duration;
+          if (audio.paused) audio.play().catch(() => {});
+        }
+      });
+      container.append(row);
+      return row;
     });
-    el.syncedTranscript.append(row);
-    state.resultTurns[i].row = row;
   });
+}
+
+let lastCaptionKey = "";
+
+function updateStageCaption(ratio = 0) {
+  const turn = state.resultTurns[Math.max(0, state.activeSyncIndex)];
+  if (!turn) {
+    el.stageLine.textContent = "";
+    el.stageSpeaker.textContent = "";
+    return;
+  }
+  let sentence = turn.sentences[0];
+  for (const s of turn.sentences) {
+    if (ratio >= s.startRatio) sentence = s;
+  }
+  const key = `${state.activeSyncIndex}:${sentence ? sentence.text : ""}`;
+  if (key === lastCaptionKey) return;
+  lastCaptionKey = key;
+  el.stageDot.style.background = slotColor(turn.speaker - 1);
+  el.stageLine.textContent = sentence ? sentence.text : turn.text;
+  el.stageSpeaker.textContent = `Speaker ${turn.speaker} · ${slotVoiceLabel(turn.speaker - 1)}`;
 }
 
 function updatePlaybackUI() {
@@ -772,39 +831,80 @@ function updatePlaybackUI() {
   if (!Number.isFinite(duration) || duration <= 0) return;
   const ratio = audio.currentTime / duration;
   renderWave(ratio);
-  el.playerTime.textContent = `${formatClock(audio.currentTime)} / ${formatClock(duration)}`;
+  const timeLabel = `${formatClock(audio.currentTime)} / ${formatClock(duration)}`;
+  el.playerTime.textContent = timeLabel;
+  el.stageTime.textContent = timeLabel;
 
   let active = -1;
   for (let i = 0; i < state.resultTurns.length; i += 1) {
     if (ratio >= state.resultTurns[i].startRatio) active = i;
   }
   if (active !== state.activeSyncIndex) {
-    state.resultTurns.forEach((t, i) => t.row.classList.toggle("active", i === active));
+    state.resultTurns.forEach((t, i) =>
+      (t.rows || []).forEach((row) => row.classList.toggle("active", i === active)));
     state.activeSyncIndex = active;
-    const row = state.resultTurns[active] && state.resultTurns[active].row;
-    if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const rows = (state.resultTurns[active] && state.resultTurns[active].rows) || [];
+    rows.forEach((row) => {
+      if (row.offsetParent !== null) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
   }
+  if (el.playerStage.open) updateStageCaption(ratio);
 }
 
-el.playBtn.addEventListener("click", () => {
+function togglePlayback() {
   const audio = el.resultAudio;
   if (!audio.src) return;
   if (audio.paused) audio.play().catch(() => {});
   else audio.pause();
-});
-el.resultAudio.addEventListener("play", () => { el.playBtn.textContent = "❚❚"; });
-el.resultAudio.addEventListener("pause", () => { el.playBtn.textContent = "►"; });
-el.resultAudio.addEventListener("ended", () => { el.playBtn.textContent = "►"; });
+}
+
+function setPlayIcons(icon) {
+  el.playBtn.textContent = icon;
+  el.stagePlayBtn.textContent = icon;
+}
+
+el.playBtn.addEventListener("click", togglePlayback);
+el.stagePlayBtn.addEventListener("click", togglePlayback);
+el.resultAudio.addEventListener("play", () => setPlayIcons("❚❚"));
+el.resultAudio.addEventListener("pause", () => setPlayIcons("►"));
+el.resultAudio.addEventListener("ended", () => setPlayIcons("►"));
 el.resultAudio.addEventListener("timeupdate", updatePlaybackUI);
 el.resultAudio.addEventListener("loadedmetadata", updatePlaybackUI);
 
-el.resultWaveform.addEventListener("click", (e) => {
+function seekFromClick(canvas, e) {
   const audio = el.resultAudio;
   if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
-  const rect = el.resultWaveform.getBoundingClientRect();
+  const rect = canvas.getBoundingClientRect();
   const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
   audio.currentTime = ratio * audio.duration;
   updatePlaybackUI();
+}
+el.resultWaveform.addEventListener("click", (e) => seekFromClick(el.resultWaveform, e));
+el.stageWaveform.addEventListener("click", (e) => seekFromClick(el.stageWaveform, e));
+
+/* Now Playing stage */
+function openPlayerStage() {
+  el.stageTitle.textContent = (state.resultTitle || "Untitled conversation").toUpperCase();
+  const audio = el.resultAudio;
+  updateStageCaption(audio.duration ? audio.currentTime / audio.duration : 0);
+  el.playerStage.showModal();
+  drawWaveOn(el.stageWaveform, el.resultAudio.duration ? el.resultAudio.currentTime / el.resultAudio.duration : 0);
+}
+
+el.openPlayerBtn.addEventListener("click", openPlayerStage);
+el.stageBackBtn.addEventListener("click", () => el.playerStage.close());
+el.playerStage.addEventListener("click", (e) => { if (e.target === el.playerStage) el.playerStage.close(); });
+
+el.stageScriptToggle.addEventListener("click", () => {
+  el.stageTranscript.hidden = !el.stageTranscript.hidden;
+  el.stageScriptToggle.textContent = el.stageTranscript.hidden ? "View full script" : "Hide script";
+});
+
+document.addEventListener("keydown", (e) => {
+  if (!el.playerStage.open || e.code !== "Space") return;
+  if (/^(input|textarea|select)$/i.test(e.target.tagName)) return;
+  e.preventDefault();
+  togglePlayback();
 });
 
 /* ---------------- Generation status ---------------- */
@@ -941,16 +1041,20 @@ el.generateBtn.addEventListener("click", async () => {
           const url = URL.createObjectURL(blob);
           el.resultAudio.src = url;
           el.downloadBtn.href = url;
+          el.stageDownloadBtn.href = url;
           el.generationTime.textContent = formatDuration((performance.now() - started) / 1000);
           el.audioDuration.textContent = formatDuration(evt.audio_duration);
           el.resultModel.textContent = state.model;
           el.playerTime.textContent = `0:00 / ${formatClock(evt.audio_duration)}`;
-          el.playBtn.textContent = "►";
+          el.stageTime.textContent = `0:00 / ${formatClock(evt.audio_duration)}`;
+          setPlayIcons("►");
+          state.resultTitle = el.scriptTitle.textContent;
           buildSyncedTranscript(turnsSnapshot);
           el.dockEmpty.hidden = true;
           el.resultBlock.classList.add("visible");
           state.wavePeaks = await decodeWavePeaks(url, 48);
           renderWave(0);
+          openPlayerStage();
         }
       }
     }
