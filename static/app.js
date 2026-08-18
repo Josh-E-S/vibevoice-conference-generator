@@ -629,10 +629,20 @@ el.loadScriptBtn.addEventListener("click", async () => {
 });
 
 /* ---------------- AI script generation ---------------- */
+const PROMPT_HINTS = [
+  "Describe a scenario above first.",
+  "Describe a new scenario above — or press Generate Audio to voice the script you already have.",
+];
+
+el.scriptPrompt.addEventListener("input", () => {
+  if (PROMPT_HINTS.includes(el.scriptGenStatus.textContent)) el.scriptGenStatus.textContent = "";
+});
+
 el.generateScriptBtn.addEventListener("click", async () => {
   const prompt = el.scriptPrompt.value.trim();
   if (!prompt) {
-    alert("Describe a scenario first.");
+    el.scriptPrompt.focus();
+    el.scriptGenStatus.textContent = state.turns.length ? PROMPT_HINTS[1] : PROMPT_HINTS[0];
     return;
   }
 
