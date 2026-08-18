@@ -3,12 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f7f4ee" />
+    <meta name="theme-color" content="#faf3e7" />
     <meta
       name="description"
       content="Chorus — an AI voice studio for writing and generating natural multi-speaker dialogue, powered by VibeVoice."
     />
     <title>Chorus — AI Voice Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/app.js" defer></script>
   </head>
@@ -16,32 +22,28 @@
     <header class="topbar">
       <a class="wordmark" href="/">
         <span class="mark">Chorus</span>
-        <span class="tagline">Voice Studio</span>
+        <span class="brand-pill">VOICE STUDIO</span>
       </a>
-      <div class="topbar-right">
+      <nav class="topbar-right">
+        <button class="link-quiet" type="button" id="browseVoicesBtn">Browse voices</button>
         <button class="link-quiet" type="button" id="aboutBtn">How it works</button>
         <div class="runtime-status" id="runtimeStatus" aria-live="polite">
           <span class="status-dot"></span>
           <span id="runtimeLabel">Connecting</span>
         </div>
-      </div>
+      </nav>
     </header>
 
     <div class="app-shell">
       <!-- SIDEBAR: cast & model -->
       <aside class="pane sidebar">
         <div class="side-section">
-          <span class="side-label">Model</span>
-          <select id="modelSelect"></select>
-        </div>
-
-        <div class="side-section">
-          <span class="side-label">Speakers</span>
-          <div class="speaker-stepper" id="speakerStepper">
-            <button type="button" data-count="1">1</button>
-            <button type="button" data-count="2">2</button>
-            <button type="button" data-count="3">3</button>
-            <button type="button" data-count="4">4</button>
+          <span class="side-label">Your cast</span>
+          <div class="seg" id="speakerStepper">
+            <button type="button" data-count="1"><strong>1</strong><span>Solo</span></button>
+            <button type="button" data-count="2"><strong>2</strong><span>Duo</span></button>
+            <button type="button" data-count="3"><strong>3</strong><span>Trio</span></button>
+            <button type="button" data-count="4"><strong>4</strong><span>Cast</span></button>
           </div>
           <div id="voiceRows"></div>
           <div id="voiceConsentRow" class="voice-consent-row" hidden>
@@ -53,11 +55,17 @@
         </div>
 
         <div class="side-section">
-          <span class="side-label">CFG Scale</span>
-          <div class="slider-row">
-            <input id="cfgScale" type="range" min="1.0" max="2.0" step="0.05" value="2.0" />
-            <span id="cfgScaleValue" class="slider-value">2.00</span>
+          <span class="side-label">Quality</span>
+          <div class="seg" id="qualityPills"></div>
+        </div>
+
+        <div class="side-section">
+          <div class="side-label-row">
+            <span class="side-label">Expressiveness</span>
+            <span id="cfgScaleValue" class="side-label-value">2.00 · Dynamic</span>
           </div>
+          <input id="cfgScale" type="range" min="1.0" max="2.0" step="0.05" value="2.0" />
+          <div class="slider-ends"><span>Calm &amp; steady</span><span>Big &amp; dynamic</span></div>
         </div>
 
         <div class="sidebar-footer">
@@ -67,8 +75,9 @@
       </aside>
 
       <!-- CANVAS: script composer + transcript -->
-      <main class="pane canvas">
-        <div class="canvas-inner">
+      <main class="pane-col canvas">
+        <div class="card composer-card">
+          <h2 class="card-heading">What's the scene?</h2>
           <div class="composer">
             <textarea
               id="scriptPrompt"
@@ -83,12 +92,14 @@
                   <span aria-hidden="true">📋</span> Import script
                 </button>
               </div>
-              <button id="generateScriptBtn" class="btn btn-ink" type="button">Write with AI</button>
+              <button id="generateScriptBtn" class="btn btn-accent" type="button">Write with AI</button>
             </div>
           </div>
           <div class="example-chips" id="examplePills"></div>
-          <div id="scriptGenStatus" class="transcript-meta" style="margin: 6px 0 4px;"></div>
+          <div id="scriptGenStatus" class="gen-status"></div>
+        </div>
 
+        <div class="card script-card">
           <div class="transcript-header">
             <h2 id="scriptTitle">Untitled conversation</h2>
             <span class="transcript-meta" id="scriptDuration"></span>
@@ -96,45 +107,67 @@
 
           <div id="turnsList">
             <div class="empty-transcript" id="emptyTurns">
-              Nothing here yet. Type a scenario above and click <strong>Write with AI</strong>,
-              or start typing your own line below.
+              <div class="empty-title">No scene yet</div>
+              Type a scenario above and click <strong>Write with AI</strong>, pick an example, or
+              start typing your own line below.
             </div>
           </div>
           <button class="add-turn" id="addTurnBtn" type="button">+ Add a line</button>
+        </div>
 
-          <div class="generate-bar">
-            <span class="generate-bar-meta" id="generateBarMeta">Add dialogue to begin</span>
-            <button id="generateBtn" class="btn btn-ink" type="button">Generate Audio</button>
-          </div>
+        <div class="generate-bar">
+          <span class="generate-bar-meta" id="generateBarMeta">Add dialogue to begin</span>
+          <button id="generateBtn" class="btn btn-ink" type="button">Generate Audio</button>
         </div>
       </main>
 
       <!-- DOCK: generation status + output -->
       <aside class="pane dock">
-        <div class="dock-label">Output</div>
+        <div class="side-label dock-label">Your recording</div>
 
         <div id="statusCard" class="status-card">
+          <div class="status-spinner" id="statusSpinner"></div>
           <div class="status-title"><span class="status-dot-pulse" id="statusDot"></span><span id="statusTitle">Working</span></div>
           <div class="status-desc" id="statusDesc"></div>
         </div>
 
-        <div id="dockEmpty" class="dock-empty">Your generated audio will appear here.</div>
+        <div id="dockEmpty" class="dock-empty">Your generated audio will appear here once you record a take.</div>
 
         <div id="resultBlock" class="result-block">
-          <canvas id="resultWaveform" width="640" height="68"></canvas>
-          <audio id="resultAudio" controls></audio>
+          <div class="player-top">
+            <button id="playBtn" class="play-btn" type="button" aria-label="Play">►</button>
+            <canvas id="resultWaveform" width="480" height="72"></canvas>
+          </div>
+          <div class="player-time" id="playerTime">0:00 / 0:00</div>
+
+          <div class="synced-transcript" id="syncedTranscript"></div>
+
           <div class="result-metrics">
             <div><span>Generation time</span> <strong id="generationTime">--</strong></div>
             <div><span>Audio length</span> <strong id="audioDuration">--</strong></div>
             <div><span>Model</span> <strong id="resultModel">--</strong></div>
           </div>
-          <a id="downloadBtn" class="btn" download="chorus-audio.wav" style="display:block; text-align:center;">Download WAV</a>
+          <a id="downloadBtn" class="btn btn-pill-outline" download="chorus-audio.wav">Download WAV</a>
+          <audio id="resultAudio" hidden></audio>
         </div>
 
         <button class="log-toggle" id="logToggleBtn" type="button" hidden>View generation log</button>
         <div class="log-box" id="logBox"></div>
       </aside>
     </div>
+
+    <!-- Voice library dialog -->
+    <dialog id="voiceLibraryDialog" class="library-dialog">
+      <div class="dialog-body">
+        <div class="library-head">
+          <h3>Choose your voices</h3>
+          <button class="dialog-close" type="button" id="closeLibraryBtn" aria-label="Close">×</button>
+        </div>
+        <input id="librarySearch" class="library-search" placeholder="Search voices by name..." />
+        <div class="filter-chips" id="libraryFilters"></div>
+        <div class="library-grid" id="libraryGrid"></div>
+      </div>
+    </dialog>
 
     <!-- Import dialog -->
     <dialog id="importDialog">
@@ -170,7 +203,7 @@
           <li><strong>Multi-speaker</strong> — up to 4 distinct voices in one take</li>
           <li><strong>Long-form</strong> — up to 90 minutes of continuous audio</li>
           <li><strong>Natural flow</strong> — turn-taking, filler words, natural pacing</li>
-          <li><strong>Two model sizes</strong> — 1.5B for fast iteration, 7B for higher fidelity</li>
+          <li><strong>Two model sizes</strong> — Fast (1.5B) for iteration, Best (7B) for fidelity</li>
         </ul>
         <img src="/public/images/diagram.jpg" alt="VibeVoice architecture diagram" />
         <div class="dialog-actions" style="justify-content: flex-end;">

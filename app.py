@@ -29,10 +29,15 @@ MODAL_STUB_NAME = "vibevoice-generator"
 MODAL_CLASS_NAME = "VibeVoiceModel"
 
 AVAILABLE_MODELS = ["VibeVoice-1.5B", "VibeVoice-7B"]
-VOICE_GENDERS = {
-    "Cherry": "F", "Chicago": "M", "Janus": "M",
-    "Mantis": "F", "Sponge": "M", "Starchild": "F",
+VOICE_INFO = {
+    "Cherry": {"gender": "F", "tags": ["Warm", "Storyteller"], "color": "#E2582A"},
+    "Chicago": {"gender": "M", "tags": ["Deep", "Narrator"], "color": "#2F6F63"},
+    "Janus": {"gender": "M", "tags": ["Bright", "Conversational"], "color": "#CC8A2E"},
+    "Mantis": {"gender": "F", "tags": ["Crisp", "Energetic"], "color": "#7B4B94"},
+    "Sponge": {"gender": "M", "tags": ["Playful", "Animated"], "color": "#3A7CA5"},
+    "Starchild": {"gender": "F", "tags": ["Airy", "Dreamy"], "color": "#B6558C"},
 }
+VOICE_GENDERS = {name: info["gender"] for name, info in VOICE_INFO.items()}
 AVAILABLE_VOICES = list(VOICE_GENDERS.keys())
 DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
 
@@ -566,8 +571,14 @@ async def api_models() -> list[str]:
 @app.get("/api/voices")
 async def api_voices() -> list[dict]:
     return [
-        {"name": name, "gender": VOICE_GENDERS[name], "preview_url": f"/public/voices/{name}.mp3"}
-        for name in AVAILABLE_VOICES
+        {
+            "name": name,
+            "gender": info["gender"],
+            "tags": info["tags"],
+            "color": info["color"],
+            "preview_url": f"/public/voices/{name}.mp3",
+        }
+        for name, info in VOICE_INFO.items()
     ]
 
 
