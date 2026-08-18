@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import os
@@ -46,6 +47,7 @@ MAX_SCRIPT_WORDS = 100000         # Effectively uncapped (2026-08-14, Josh) — 
                                    # blocked genuine long-form renders below the backend's actual limit
 MAX_TURNS = 250                    # Hard ceiling regardless of target length (safety valve)
 AUDIO_TTL_SECONDS = 900
+MAX_CUSTOM_AUDIO_BYTES = 15 * 1024 * 1024  # cap per uploaded voice-clone clip
 
 
 def _turns_budget_for_words(target_words: int) -> int:
@@ -462,6 +464,26 @@ except modal.exception.NotFoundError:
     remote_generate_function = None
 
 
+def _decode_custom_audio(value: str | None, slot: int) -> bytes | None:
+    """Decode a base64 (optionally data:...;base64, prefixed) voice-clone upload."""
+    if not value:
+        return None
+    if "," in value and value.strip().lower().startswith("data:"):
+        value = value.split(",", 1)[1]
+    try:
+        audio_bytes = base64.b64decode(value, validate=True)
+    except (base64.binascii.Error, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Speaker {slot + 1}: invalid uploaded audio.") from e
+    if len(audio_bytes) > MAX_CUSTOM_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Speaker {slot + 1}: uploaded voice clip is too large (max {MAX_CUSTOM_AUDIO_BYTES // (1024 * 1024)} MB).",
+        )
+    if not audio_bytes:
+        return None
+    return audio_bytes
+
+
 def _encode_wav(sample_rate: int, audio: np.ndarray) -> bytes:
     audio = np.asarray(audio)
     if audio.dtype.kind == "f":
@@ -649,6 +671,8 @@ class GenerateRequest(BaseModel):
     turns: list[dict]
     speakers: list[str | None]
     cfg_scale: float
+    custom_audio: list[str | None] = [None, None, None, None]  # base64 (or data: URI), one per slot
+    voice_consent: bool = False
 
 
 @app.post("/api/generate")
@@ -669,6 +693,13 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
         )
 
     speakers = (list(payload.speakers) + [None, None, None, None])[:4]
+    custom_audio_raw = (list(payload.custom_audio) + [None, None, None, None])[:4]
+    custom_audio = [_decode_custom_audio(v, i) for i, v in enumerate(custom_audio_raw)]
+    if any(a is not None for a in custom_audio) and not payload.voice_consent:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm you have the right to use each uploaded voice before generating.",
+        )
 
     async def event_stream():
         _prune_audio_store()
@@ -687,6 +718,10 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
                         speaker_2=speakers[1],
                         speaker_3=speakers[2],
                         speaker_4=speakers[3],
+                        custom_audio_1=custom_audio[0],
+                        custom_audio_2=custom_audio[1],
+                        custom_audio_3=custom_audio[2],
+                        custom_audio_4=custom_audio[3],
                         cfg_scale=payload.cfg_scale,
                         model_name=payload.model,
                     ):
