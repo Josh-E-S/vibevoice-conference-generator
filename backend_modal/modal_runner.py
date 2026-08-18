@@ -162,10 +162,13 @@ class VibeVoiceModel:
         cache_data = {
             "script": script.strip().lower(),  # Normalize script
             "model": model_name,
-            "speakers": sorted(speakers),  # Sort for consistency
+            "speakers": list(speakers),  # Order matters: slot N's voice changes the take
             "cfg_scale": cfg_scale,
             "inference_steps": self.inference_steps,
-            "pipeline": "chunked-parallel-v1",  # renditions differ from monolithic
+            # Bump to invalidate all prior entries (v1 keys sorted speakers and
+            # predates the restored voice assets, so old entries can replay takes
+            # with wrong or corrupted voices).
+            "pipeline": "chunked-parallel-v2",
         }
         cache_str = json.dumps(cache_data, sort_keys=True)
         return hashlib.sha256(cache_str.encode()).hexdigest()
