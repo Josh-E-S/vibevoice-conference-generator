@@ -144,6 +144,9 @@
           <div class="player-top">
             <button id="playBtn" class="play-btn" type="button" aria-label="Play">►</button>
             <canvas id="resultWaveform" width="480" height="72"></canvas>
+            <button id="openPlayerBtn" class="icon-btn" type="button" title="Open player" aria-label="Open player">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 1.5h4v4"/><path d="M12.5 1.5 7.8 6.2"/><path d="M5.5 12.5h-4v-4"/><path d="M1.5 12.5 6.2 7.8"/></svg>
+            </button>
           </div>
           <div class="player-time" id="playerTime">0:00 / 0:00</div>
 
@@ -154,7 +157,6 @@
             <div><span>Audio length</span> <strong id="audioDuration">--</strong></div>
             <div><span>Model</span> <strong id="resultModel">--</strong></div>
           </div>
-          <button id="openPlayerBtn" class="btn btn-accent btn-block" type="button">Open player</button>
           <a id="downloadBtn" class="btn btn-pill-outline" download="chorus-audio.wav">Download WAV</a>
           <audio id="resultAudio" hidden></audio>
         </div>
@@ -167,6 +169,9 @@
     <!-- Now Playing stage -->
     <dialog id="playerStage" class="player-stage">
       <div class="stage-body">
+        <button id="stageCloseBtn" class="icon-btn stage-close" type="button" title="Close (Esc)" aria-label="Close player">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 2l10 10M12 2L2 12"/></svg>
+        </button>
         <div class="stage-eyebrow">NOW PLAYING · <span id="stageTitle"></span></div>
         <div class="stage-play-row">
           <button id="stagePlayBtn" class="play-btn play-btn-lg" type="button" aria-label="Play">►</button>
@@ -179,7 +184,6 @@
           <div class="stage-speaker" id="stageSpeaker"></div>
         </div>
         <div class="stage-actions">
-          <button class="btn btn-pill-outline" id="stageBackBtn" type="button">Back to editor</button>
           <a class="btn btn-ink" id="stageDownloadBtn" download="chorus-audio.wav">Download WAV</a>
           <button class="btn btn-pill-outline" id="stageScriptToggle" type="button">View full script</button>
         </div>

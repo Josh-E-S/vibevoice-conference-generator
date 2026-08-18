@@ -801,7 +801,21 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
 .stage-actions { display: flex; justify-content: center; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
 .stage-transcript { margin: 20px 0 0; max-height: 260px; }
 .stage-transcript .sync-text { font-size: 0.88rem; }
-.btn-block { display: block; width: 100%; text-align: center; margin-bottom: 8px; }
+
+.icon-btn {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: var(--field);
+  color: var(--ink-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.icon-btn:hover { background: var(--accent-soft); color: var(--accent); }
+.stage-body { position: relative; }
+.stage-close { position: absolute; top: 16px; right: 16px; }
 
 /* Voice library */
 .library-dialog { max-width: 780px; }

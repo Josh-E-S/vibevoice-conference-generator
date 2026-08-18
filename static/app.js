@@ -64,7 +64,7 @@ const el = {};
   "playBtn", "playerTime", "syncedTranscript", "openPlayerBtn",
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
   "playerStage", "stageTitle", "stagePlayBtn", "stageWaveform", "stageTime",
-  "stageDot", "stageLine", "stageSpeaker", "stageBackBtn", "stageDownloadBtn",
+  "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn",
   "stageScriptToggle", "stageTranscript",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
   "logToggleBtn", "logBox",
@@ -892,12 +892,17 @@ function openPlayerStage() {
 }
 
 el.openPlayerBtn.addEventListener("click", openPlayerStage);
-el.stageBackBtn.addEventListener("click", () => el.playerStage.close());
+el.stageCloseBtn.addEventListener("click", () => el.playerStage.close());
 el.playerStage.addEventListener("click", (e) => { if (e.target === el.playerStage) el.playerStage.close(); });
 
 el.stageScriptToggle.addEventListener("click", () => {
   el.stageTranscript.hidden = !el.stageTranscript.hidden;
   el.stageScriptToggle.textContent = el.stageTranscript.hidden ? "View full script" : "Hide script";
+  if (!el.stageTranscript.hidden) {
+    const active = state.resultTurns[state.activeSyncIndex];
+    const target = (active && active.rows && active.rows[1]) || el.stageTranscript;
+    target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
 });
 
 document.addEventListener("keydown", (e) => {
