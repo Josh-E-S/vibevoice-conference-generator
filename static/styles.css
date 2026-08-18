@@ -284,6 +284,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: 6px 0 2p
 
 /* ---------------- Composer ---------------- */
 .composer-card:has(.composer-collapsed:not([hidden])) { padding: 14px 20px; }
+.composer-collapsed[hidden] { display: none; }
 .composer-collapsed {
   display: flex;
   align-items: center;
