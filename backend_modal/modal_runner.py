@@ -268,12 +268,42 @@ class VibeVoiceModel:
     def _split_turns_into_chunks(cls, turn_lines: list) -> list:
         """Group whole 'Speaker N:' turn lines into ~CHUNK_TARGET_WORDS chunks.
 
-        Never splits inside a turn (turn boundaries are what keep pacing
+        Never splits inside a normal turn (turn boundaries are what keep pacing
         natural and identity anchored), so each chunk is itself a valid
-        mini-script for the same speaker set.
+        mini-script for the same speaker set. The one exception is an OVERSIZED
+        turn — a monologue well past CHUNK_TARGET_WORDS. Without splitting it
+        at sentence boundaries, a solo script (often a single giant turn) can
+        never batch and renders single-pass at sub-realtime no matter how long
+        it is. Mid-monologue seams get the same 0.25 s crossfade and per-chunk
+        quality gate as turn seams.
         """
-        chunks, cur, cur_words = [], [], 0
+        import re as _re
+        expanded = []
         for line in turn_lines:
+            if len(line.split()) <= int(cls.CHUNK_TARGET_WORDS * 1.5):
+                expanded.append(line)
+                continue
+            m = _re.match(r"^(Speaker\s+\d+\s*:)\s*(.*)$", line, _re.S | _re.I)
+            tag, body = (m.group(1), m.group(2)) if m else ("Speaker 1:", line)
+            sentences = [s for s in _re.split(r"(?<=[.!?…])\s+", body) if s.strip()]
+            cur_s, cur_w = [], 0
+            pieces = []
+            for sentence in sentences:
+                cur_s.append(sentence)
+                cur_w += len(sentence.split())
+                if cur_w >= cls.CHUNK_TARGET_WORDS:
+                    pieces.append(f"{tag} {' '.join(cur_s)}")
+                    cur_s, cur_w = [], 0
+            if cur_s:
+                # tiny tail: fold into the previous piece of the same turn
+                if pieces and cur_w < cls.CHUNK_TARGET_WORDS // 3:
+                    pieces[-1] = pieces[-1] + " " + " ".join(cur_s)
+                else:
+                    pieces.append(f"{tag} {' '.join(cur_s)}")
+            expanded.extend(pieces if pieces else [line])
+
+        chunks, cur, cur_words = [], [], 0
+        for line in expanded:
             cur.append(line)
             cur_words += len(line.split())
             if cur_words >= cls.CHUNK_TARGET_WORDS:
