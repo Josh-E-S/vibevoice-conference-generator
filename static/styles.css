@@ -935,6 +935,52 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
 }
 @keyframes recPulse { 50% { opacity: 0.7; } }
 #recordBtn.recording { background: var(--error); border-color: var(--error); animation: recPulse 1.2s ease-in-out infinite; }
+.read-script-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: -6px 0 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-faint);
+  text-decoration: underline dotted;
+  cursor: pointer;
+  display: block;
+}
+.read-script-toggle:hover { color: var(--accent); }
+.read-script-card {
+  background: var(--paper-soft);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin: -6px 0 14px;
+}
+.read-script-text {
+  font-family: var(--font-serif);
+  font-size: 1.08rem;
+  line-height: 1.65;
+  color: var(--ink);
+}
+.read-script-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 0.74rem;
+  color: var(--ink-faint);
+}
+.read-script-foot button {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .clone-optimize {
   display: flex;
   align-items: flex-start;

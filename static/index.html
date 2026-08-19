@@ -221,6 +221,14 @@
           <label class="btn clone-upload-label">Upload file<input id="cloneFileInput" type="file" accept="audio/*" hidden /></label>
           <span id="recordTimer" class="record-timer" hidden>0:00</span>
         </div>
+        <button id="readScriptToggle" class="read-script-toggle" type="button">Not sure what to say? Show a script to read →</button>
+        <div id="readScriptCard" class="read-script-card" hidden>
+          <div class="read-script-text" id="readScriptText"></div>
+          <div class="read-script-foot">
+            <span id="readScriptMeta"></span>
+            <button id="readScriptShuffle" type="button">↻ Try another</button>
+          </div>
+        </div>
         <label class="clone-optimize">
           <input type="checkbox" id="optimizeCheckbox" checked />
           Optimize audio — suppress mic noise, trim silence, remove rumble, level the volume

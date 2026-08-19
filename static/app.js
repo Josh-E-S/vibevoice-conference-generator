@@ -82,6 +82,7 @@ const el = {};
   "cloneVoiceBtn", "cloneDialog", "closeCloneBtn", "recordBtn", "cloneFileInput", "recordTimer",
   "clonePreview", "cloneAudio", "cloneMeta", "cloneSlotRow", "cloneConsentCheckbox",
   "cloneNameInput", "cloneReplaceRow", "cloneReplacePills", "optimizeCheckbox",
+  "readScriptToggle", "readScriptCard", "readScriptText", "readScriptMeta", "readScriptShuffle",
   "cancelCloneBtn", "useCloneBtn",
   "importDialog", "pastedScript", "scriptFileUpload", "cancelImportBtn", "loadScriptBtn",
 ].forEach((id) => { el[id] = document.getElementById(id); });
@@ -672,6 +673,17 @@ el.librarySearch.addEventListener("input", () => {
 });
 
 /* ---------------- Clone-a-voice dialog ---------------- */
+// Read-along passages tuned for cloning: natural first-person voice, a
+// question and an exclamation in each (pitch range), varied sounds, and
+// ~25-30s when read at a comfortable pace.
+const READ_SCRIPTS = [
+  "Okay, so here's the thing about mornings: I always swear I'll get up early, and somehow the snooze button wins every single time. Last Tuesday I actually did it — coffee, a quick walk, the whole routine — and honestly? Best day I'd had in months. The air was cool, the streets were quiet, and for once nobody needed a single thing from me. Maybe tomorrow I'll try it again.",
+  "When I was about nine, my grandfather taught me to fish off the old wooden dock behind his house. He'd say, \"Patience isn't waiting — it's what you do while you wait.\" I had no idea what that meant back then. Now, every time I'm stuck in line or watching the kettle boil, I hear his voice again, and I catch myself smiling without meaning to.",
+  "You want to know the best meal I've ever had? A tiny noodle shop, eleven o'clock at night, rain hammering against the windows. Six seats, no menu, and a cook who never said a word. That broth changed my life! I've chased the flavor everywhere since — big cities, little towns, my own kitchen — and nothing has ever come close to it.",
+  "There's a particular hour just before sunset when everything slows down. The light turns gold, shadows stretch long across the yard, and even the birds seem to lower their voices. I like to sit outside then, with a cup of tea going cold beside me, and let my thoughts wander wherever they want. It never lasts long. Isn't that exactly why it matters?",
+  "Here's my confession: I talk to my plants. Not just a quick hello, either — full conversations. The fern gets encouragement, the cactus gets tough love, and the orchid? The orchid gets bribed. Does any of it work? Who knows! But they're all still alive, which is more than I can say for every plant I owned before, so I'm not changing a thing.",
+];
+
 const CLONE_MIN_SECONDS = 5;        // hard floor
 const CLONE_GOOD_SECONDS = 10;      // below this: warn, above: good to go
 const CLONE_MAX_RECORD_SECONDS = 60;
@@ -899,6 +911,30 @@ el.cloneFileInput.addEventListener("change", async () => {
 });
 
 el.cloneConsentCheckbox.addEventListener("change", updateCloneConfirm);
+
+/* Read-along script: gives recorders something natural to say */
+let readScriptIndex = 0;
+
+function showReadScript() {
+  const text = READ_SCRIPTS[readScriptIndex % READ_SCRIPTS.length];
+  el.readScriptText.textContent = text;
+  const words = text.split(/\s+/).length;
+  el.readScriptMeta.textContent =
+    `~${Math.round((words / 150) * 60)}s at a relaxed pace · read it like you'd say it, not like an announcement`;
+}
+
+el.readScriptToggle.addEventListener("click", () => {
+  el.readScriptCard.hidden = !el.readScriptCard.hidden;
+  el.readScriptToggle.textContent = el.readScriptCard.hidden
+    ? "Not sure what to say? Show a script to read →"
+    : "Hide the script";
+  if (!el.readScriptCard.hidden) showReadScript();
+});
+
+el.readScriptShuffle.addEventListener("click", () => {
+  readScriptIndex += 1;
+  showReadScript();
+});
 
 // Re-apply (or undo) optimization on the captured clip when the box is toggled.
 el.optimizeCheckbox.addEventListener("change", async () => {
