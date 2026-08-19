@@ -249,6 +249,20 @@ button, select, input, textarea { font-family: inherit; }
 }
 .upload-mini-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+.clone-voice-btn {
+  width: 100%;
+  border: 1.5px dashed var(--border-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  border-radius: 14px;
+  padding: 11px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+.clone-voice-btn:hover { border-color: var(--accent); color: var(--accent); }
+
 .voice-consent-row {
   border: 1px solid var(--speaker-3);
   background: rgba(204, 138, 46, 0.08);
@@ -906,6 +920,60 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
   padding: 0;
 }
 .slot-assign button.assigned { border: none; color: #fff; }
+
+.use-voice-btn { padding: 7px 14px; font-size: 0.78rem; }
+.use-voice-btn:disabled { background: var(--field); border-color: var(--field); color: var(--ink-faint); }
+
+/* Clone dialog */
+.clone-capture { display: flex; align-items: center; gap: 10px; margin: 4px 0 14px; }
+.clone-upload-label { cursor: pointer; }
+.record-timer {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+@keyframes recPulse { 50% { opacity: 0.7; } }
+#recordBtn.recording { background: var(--error); border-color: var(--error); animation: recPulse 1.2s ease-in-out infinite; }
+.clone-preview { margin-bottom: 14px; }
+.clone-preview audio { width: 100%; height: 34px; margin-bottom: 6px; }
+.clone-meta { font-size: 0.78rem; color: var(--ink-dim); }
+.clone-section-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
+}
+.clone-slots { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.clone-slot-pill {
+  padding: 7px 13px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: #fff;
+  color: var(--ink-dim);
+}
+.clone-slot-pill.active {
+  border: 1.5px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.clone-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.clone-consent input { margin-top: 2px; flex-shrink: 0; }
 
 /* ---------------- About dialog ---------------- */
 #aboutDialog .dialog-body { max-height: 70vh; overflow-y: auto; }

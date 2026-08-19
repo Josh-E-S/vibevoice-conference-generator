@@ -46,6 +46,7 @@
             <button type="button" data-count="4"><strong>4</strong><span>Cast</span></button>
           </div>
           <div id="voiceRows"></div>
+          <button id="cloneVoiceBtn" class="clone-voice-btn" type="button">🎙️ Clone a voice</button>
           <div id="voiceConsentRow" class="voice-consent-row" hidden>
             <label>
               <input type="checkbox" id="voiceConsentCheckbox" />
@@ -195,12 +196,45 @@
     <dialog id="voiceLibraryDialog" class="library-dialog">
       <div class="dialog-body">
         <div class="library-head">
-          <h3>Choose your voices</h3>
+          <h3 id="libraryTitle">Choose your voices</h3>
           <button class="dialog-close" type="button" id="closeLibraryBtn" aria-label="Close">×</button>
         </div>
         <input id="librarySearch" class="library-search" placeholder="Search voices by name..." />
         <div class="filter-chips" id="libraryFilters"></div>
         <div class="library-grid" id="libraryGrid"></div>
+      </div>
+    </dialog>
+
+    <!-- Clone voice dialog -->
+    <dialog id="cloneDialog">
+      <div class="dialog-body">
+        <div class="library-head">
+          <h3>Clone a voice</h3>
+          <button class="dialog-close" type="button" id="closeCloneBtn" aria-label="Close">×</button>
+        </div>
+        <p>
+          Record or upload <strong>15–30 seconds</strong> of one person speaking clearly, with no
+          background noise or music. That voice becomes one of your speakers.
+        </p>
+        <div class="clone-capture">
+          <button id="recordBtn" class="btn btn-accent" type="button">● Record</button>
+          <label class="btn clone-upload-label">Upload file<input id="cloneFileInput" type="file" accept="audio/*" hidden /></label>
+          <span id="recordTimer" class="record-timer" hidden>0:00</span>
+        </div>
+        <div id="clonePreview" class="clone-preview" hidden>
+          <audio id="cloneAudio" controls></audio>
+          <div id="cloneMeta" class="clone-meta"></div>
+        </div>
+        <div class="clone-section-label">Use as</div>
+        <div id="cloneSlotRow" class="clone-slots"></div>
+        <label class="clone-consent">
+          <input type="checkbox" id="cloneConsentCheckbox" />
+          I have the right to use this voice and will disclose this audio as synthetic.
+        </label>
+        <div class="dialog-actions" style="justify-content: flex-end;">
+          <button class="btn" type="button" id="cancelCloneBtn">Cancel</button>
+          <button class="btn btn-ink" type="button" id="useCloneBtn" disabled>Use this voice</button>
+        </div>
       </div>
     </dialog>
 

@@ -45,6 +45,12 @@ const state = {
   playingVoice: null,
   librarySearch: "",
   libraryFilter: "all",
+  libraryTargetSlot: null,  // non-null: library picks a voice for this one slot
+  cloneTargetSlot: 0,
+  cloneBlob: null,
+  cloneName: "",
+  cloneDuration: 0,
+  mediaRecorder: null,
   resultTurns: [],       // snapshot of turns for the synced transcript
   resultTitle: "",
   wavePeaks: null,
@@ -68,7 +74,10 @@ const el = {};
   "stageScriptToggle", "stageTranscript",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
   "logToggleBtn", "logBox",
-  "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid",
+  "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid", "libraryTitle",
+  "cloneVoiceBtn", "cloneDialog", "closeCloneBtn", "recordBtn", "cloneFileInput", "recordTimer",
+  "clonePreview", "cloneAudio", "cloneMeta", "cloneSlotRow", "cloneConsentCheckbox",
+  "cancelCloneBtn", "useCloneBtn",
   "importDialog", "pastedScript", "scriptFileUpload", "cancelImportBtn", "loadScriptBtn",
 ].forEach((id) => { el[id] = document.getElementById(id); });
 
@@ -128,11 +137,14 @@ el.openImportBtn.addEventListener("click", () => el.importDialog.showModal());
 el.cancelImportBtn.addEventListener("click", () => el.importDialog.close());
 el.importDialog.addEventListener("click", (e) => { if (e.target === el.importDialog) el.importDialog.close(); });
 
-function openLibrary() {
+function openLibrary(targetSlot = null) {
+  state.libraryTargetSlot = targetSlot;
+  el.libraryTitle.textContent =
+    targetSlot === null ? "Choose your voices" : `Choose a voice for Speaker ${targetSlot + 1}`;
   renderLibrary();
   el.voiceLibraryDialog.showModal();
 }
-el.browseVoicesBtn.addEventListener("click", openLibrary);
+el.browseVoicesBtn.addEventListener("click", () => openLibrary(null));
 el.closeLibraryBtn.addEventListener("click", () => el.voiceLibraryDialog.close());
 el.voiceLibraryDialog.addEventListener("click", (e) => {
   if (e.target === el.voiceLibraryDialog) el.voiceLibraryDialog.close();
@@ -248,49 +260,20 @@ function renderCast() {
     changeBtn.type = "button";
     changeBtn.className = "slot-change";
     changeBtn.textContent = "Change";
-    changeBtn.addEventListener("click", openLibrary);
+    changeBtn.addEventListener("click", () => openLibrary(i));
     card.append(changeBtn);
 
     el.voiceRows.append(card);
 
-    if (isCustomVoice(i)) {
+    if (isCustomVoice(i) && !state.customVoiceFiles[i]) {
       const uploadRow = document.createElement("div");
       uploadRow.className = "custom-voice-row";
-
-      const fileLabel = document.createElement("label");
-      fileLabel.className = "btn upload-mini-btn";
-      fileLabel.textContent = state.customVoiceFiles[i] ? state.customVoiceFiles[i].name : "Choose audio file…";
-      const fileInput = document.createElement("input");
-      fileInput.type = "file";
-      fileInput.accept = "audio/*";
-      fileInput.hidden = true;
-      fileInput.addEventListener("change", () => {
-        const file = fileInput.files[0];
-        if (!file) return;
-        if (file.size > MAX_CUSTOM_AUDIO_BYTES) {
-          alert(`That file is too large (max ${MAX_CUSTOM_AUDIO_BYTES / (1024 * 1024)} MB).`);
-          fileInput.value = "";
-          return;
-        }
-        state.customVoiceFiles[i] = file;
-        renderCast();
-      });
-      fileLabel.append(fileInput);
-      uploadRow.append(fileLabel);
-
-      if (state.customVoiceFiles[i]) {
-        const clearBtn = document.createElement("button");
-        clearBtn.type = "button";
-        clearBtn.className = "btn btn-icon-only";
-        clearBtn.textContent = "✕";
-        clearBtn.title = "Remove file";
-        clearBtn.addEventListener("click", () => {
-          state.customVoiceFiles[i] = null;
-          renderCast();
-        });
-        uploadRow.append(clearBtn);
-      }
-
+      const fixBtn = document.createElement("button");
+      fixBtn.type = "button";
+      fixBtn.className = "btn upload-mini-btn";
+      fixBtn.textContent = "Record or upload a clip…";
+      fixBtn.addEventListener("click", () => openCloneDialog(i));
+      uploadRow.append(fixBtn);
       el.voiceRows.append(uploadRow);
     }
   }
@@ -436,16 +419,32 @@ function renderLibraryGrid() {
     meta.className = "voice-card-meta";
     meta.textContent = [GENDER_LABELS[voice.gender], ...(voice.tags || [])].join(" · ");
 
-    body.append(head, meta, makeSlotAssignRow(
-      (i) => state.voiceSelections[i] === voice.name,
-      () => voice.color,
-      (i) => assignVoiceToSlot(i, voice.name),
-    ));
+    const slot = state.libraryTargetSlot;
+    if (slot === null) {
+      body.append(head, meta, makeSlotAssignRow(
+        (i) => state.voiceSelections[i] === voice.name,
+        () => voice.color,
+        (i) => assignVoiceToSlot(i, voice.name),
+      ));
+    } else {
+      // Slot-first mode: one click puts this voice in the target slot.
+      const useBtn = document.createElement("button");
+      useBtn.type = "button";
+      useBtn.className = "btn btn-accent use-voice-btn";
+      const current = state.voiceSelections[slot] === voice.name;
+      useBtn.textContent = current ? "Current voice" : "Use voice";
+      useBtn.disabled = current;
+      useBtn.addEventListener("click", () => {
+        assignVoiceToSlot(slot, voice.name);
+        el.voiceLibraryDialog.close();
+      });
+      body.append(head, meta, useBtn);
+    }
     card.append(avatar, body);
     el.libraryGrid.append(card);
   });
 
-  // Clone-a-voice card, always available
+  // Clone-a-voice card routes to the dedicated clone dialog
   const clone = document.createElement("div");
   clone.className = "voice-card clone-card";
   const cloneAvatar = document.createElement("span");
@@ -461,12 +460,17 @@ function renderLibraryGrid() {
   cloneHead.append(cloneName);
   const cloneMeta = document.createElement("div");
   cloneMeta.className = "voice-card-meta";
-  cloneMeta.textContent = "Upload a short clip of a voice you have rights to use";
-  cloneBody.append(cloneHead, cloneMeta, makeSlotAssignRow(
-    (i) => isCustomVoice(i),
-    () => "#2a2016",
-    (i) => assignVoiceToSlot(i, CUSTOM_VOICE_VALUE),
-  ));
+  cloneMeta.textContent = "Record or upload 15–30s of a voice you have rights to use";
+  const cloneBtn = document.createElement("button");
+  cloneBtn.type = "button";
+  cloneBtn.className = "btn btn-accent use-voice-btn";
+  cloneBtn.textContent = "Record or upload";
+  cloneBtn.addEventListener("click", () => {
+    const target = state.libraryTargetSlot;
+    el.voiceLibraryDialog.close();
+    openCloneDialog(target === null ? 0 : target);
+  });
+  cloneBody.append(cloneHead, cloneMeta, cloneBtn);
   clone.append(cloneAvatar, cloneBody);
   el.libraryGrid.append(clone);
 
@@ -482,6 +486,206 @@ function renderLibrary() {
 el.librarySearch.addEventListener("input", () => {
   state.librarySearch = el.librarySearch.value;
   renderLibraryGrid();
+});
+
+/* ---------------- Clone-a-voice dialog ---------------- */
+const CLONE_MIN_SECONDS = 5;        // hard floor
+const CLONE_GOOD_SECONDS = 10;      // below this: warn, above: good to go
+const CLONE_MAX_RECORD_SECONDS = 60;
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i += 1) view.setUint8(off + i, s.charCodeAt(i)); };
+  writeStr(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); writeStr(8, "WAVE");
+  writeStr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  writeStr(36, "data"); view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i += 1) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+// Decode any browser-supported audio and re-render as 24kHz mono WAV,
+// so the backend always receives a format it can read.
+async function toMonoWav(arrayBuffer) {
+  const probe = new AudioContext();
+  let decoded;
+  try {
+    decoded = await probe.decodeAudioData(arrayBuffer.slice(0));
+  } finally {
+    await probe.close();
+  }
+  const rate = 24000;
+  const frames = Math.ceil(decoded.duration * rate);
+  const offline = new OfflineAudioContext(1, frames, rate);
+  const source = offline.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offline.destination);
+  source.start();
+  const rendered = await offline.startRendering();
+  return { blob: encodeWav(rendered.getChannelData(0), rate), duration: decoded.duration };
+}
+
+function setCloneClip(blob, name, duration) {
+  state.cloneBlob = blob;
+  state.cloneName = name;
+  state.cloneDuration = duration;
+  el.cloneAudio.src = URL.createObjectURL(blob);
+  el.clonePreview.hidden = false;
+  const secs = Math.round(duration);
+  let note = `${name} · ${secs}s`;
+  if (duration < CLONE_MIN_SECONDS) note += " — too short; record at least 5 seconds.";
+  else if (duration < CLONE_GOOD_SECONDS) note += " — usable, but 15–30s clones much better.";
+  else note += " — looks good.";
+  el.cloneMeta.textContent = note;
+  updateCloneConfirm();
+}
+
+function updateCloneConfirm() {
+  el.useCloneBtn.disabled = !(
+    state.cloneBlob &&
+    state.cloneDuration >= CLONE_MIN_SECONDS &&
+    el.cloneConsentCheckbox.checked
+  );
+}
+
+function renderCloneSlots() {
+  el.cloneSlotRow.innerHTML = "";
+  for (let i = 0; i < state.numSpeakers; i += 1) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "clone-slot-pill";
+    pill.textContent = `Speaker ${i + 1} · ${slotVoiceLabel(i)}`;
+    pill.classList.toggle("active", i === state.cloneTargetSlot);
+    pill.addEventListener("click", () => {
+      state.cloneTargetSlot = i;
+      renderCloneSlots();
+    });
+    el.cloneSlotRow.append(pill);
+  }
+}
+
+function stopRecording() {
+  if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") state.mediaRecorder.stop();
+}
+
+function resetRecordButton() {
+  clearInterval(recordTicker);
+  el.recordBtn.textContent = "● Record";
+  el.recordBtn.classList.remove("recording");
+  el.recordTimer.hidden = true;
+}
+
+let recordTicker = null;
+
+async function startRecording() {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    el.cloneMeta.textContent = "Microphone access was denied — allow it in your browser, or upload a file instead.";
+    el.clonePreview.hidden = false;
+    return;
+  }
+  const chunks = [];
+  const recorder = new MediaRecorder(stream);
+  state.mediaRecorder = recorder;
+  recorder.addEventListener("dataavailable", (e) => { if (e.data.size) chunks.push(e.data); });
+  recorder.addEventListener("stop", async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    resetRecordButton();
+    try {
+      const raw = await new Blob(chunks).arrayBuffer();
+      const { blob, duration } = await toMonoWav(raw);
+      setCloneClip(blob, "Recorded clip", duration);
+    } catch {
+      el.cloneMeta.textContent = "Could not process the recording — try again or upload a file.";
+      el.clonePreview.hidden = false;
+    }
+  });
+  recorder.start();
+  const startedAt = Date.now();
+  el.recordBtn.textContent = "■ Stop";
+  el.recordBtn.classList.add("recording");
+  el.recordTimer.hidden = false;
+  el.recordTimer.textContent = "0:00";
+  clearInterval(recordTicker);
+  recordTicker = setInterval(() => {
+    const elapsed = (Date.now() - startedAt) / 1000;
+    el.recordTimer.textContent = formatClock(elapsed);
+    if (elapsed >= CLONE_MAX_RECORD_SECONDS) stopRecording();
+  }, 250);
+}
+
+el.recordBtn.addEventListener("click", () => {
+  if (state.mediaRecorder && state.mediaRecorder.state === "recording") stopRecording();
+  else startRecording();
+});
+
+el.cloneFileInput.addEventListener("change", async () => {
+  const file = el.cloneFileInput.files[0];
+  el.cloneFileInput.value = "";
+  if (!file) return;
+  if (file.size > MAX_CUSTOM_AUDIO_BYTES) {
+    alert(`That file is too large (max ${MAX_CUSTOM_AUDIO_BYTES / (1024 * 1024)} MB).`);
+    return;
+  }
+  try {
+    const { blob, duration } = await toMonoWav(await file.arrayBuffer());
+    setCloneClip(blob, file.name, duration);
+  } catch {
+    // Undecodable in this browser — pass the raw file through; the backend may still read it.
+    state.cloneBlob = file;
+    state.cloneName = file.name;
+    state.cloneDuration = CLONE_GOOD_SECONDS;
+    el.cloneAudio.removeAttribute("src");
+    el.clonePreview.hidden = false;
+    el.cloneMeta.textContent = `${file.name} — couldn't preview this format; it will be sent as-is.`;
+    updateCloneConfirm();
+  }
+});
+
+el.cloneConsentCheckbox.addEventListener("change", updateCloneConfirm);
+
+function openCloneDialog(targetSlot) {
+  state.cloneTargetSlot = Math.min(targetSlot, state.numSpeakers - 1);
+  state.cloneBlob = null;
+  state.cloneName = "";
+  state.cloneDuration = 0;
+  el.clonePreview.hidden = true;
+  el.cloneAudio.removeAttribute("src");
+  el.cloneMeta.textContent = "";
+  el.cloneConsentCheckbox.checked = el.voiceConsentCheckbox.checked;
+  renderCloneSlots();
+  updateCloneConfirm();
+  el.cloneDialog.showModal();
+}
+
+function closeCloneDialog() {
+  stopRecording();
+  resetRecordButton();
+  el.cloneDialog.close();
+}
+
+el.cloneVoiceBtn.addEventListener("click", () => openCloneDialog(0));
+el.closeCloneBtn.addEventListener("click", closeCloneDialog);
+el.cancelCloneBtn.addEventListener("click", closeCloneDialog);
+el.cloneDialog.addEventListener("click", (e) => { if (e.target === el.cloneDialog) closeCloneDialog(); });
+
+el.useCloneBtn.addEventListener("click", () => {
+  const i = state.cloneTargetSlot;
+  const ext = state.cloneBlob.type === "audio/wav" ? ".wav" : "";
+  const base = state.cloneName === "Recorded clip" ? `recorded-voice${ext}` : state.cloneName;
+  state.customVoiceFiles[i] = new File([state.cloneBlob], base, { type: state.cloneBlob.type });
+  state.voiceSelections[i] = CUSTOM_VOICE_VALUE;
+  el.voiceConsentCheckbox.checked = el.cloneConsentCheckbox.checked;
+  closeCloneDialog();
+  renderCast();
+  renderTurns();
 });
 
 /* ---------------- Turn editor ---------------- */
