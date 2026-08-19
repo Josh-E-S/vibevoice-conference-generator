@@ -221,6 +221,10 @@
           <label class="btn clone-upload-label">Upload file<input id="cloneFileInput" type="file" accept="audio/*" hidden /></label>
           <span id="recordTimer" class="record-timer" hidden>0:00</span>
         </div>
+        <label class="clone-optimize">
+          <input type="checkbox" id="optimizeCheckbox" checked />
+          Optimize audio — suppress mic noise, trim silence, remove rumble, level the volume
+        </label>
         <div id="clonePreview" class="clone-preview" hidden>
           <audio id="cloneAudio" controls></audio>
           <div id="cloneMeta" class="clone-meta"></div>

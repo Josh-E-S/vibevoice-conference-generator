@@ -53,6 +53,7 @@ const state = {
   cloneName: "",
   cloneDuration: 0,
   cloneReplaceId: null,     // when the voice library is full: which saved voice to override
+  cloneRawBuffer: null,     // last capture's undecoded bytes, so Optimize can be re-applied
   mediaRecorder: null,
   resultTurns: [],       // snapshot of turns for the synced transcript
   resultTitle: "",
@@ -80,7 +81,7 @@ const el = {};
   "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid", "libraryTitle",
   "cloneVoiceBtn", "cloneDialog", "closeCloneBtn", "recordBtn", "cloneFileInput", "recordTimer",
   "clonePreview", "cloneAudio", "cloneMeta", "cloneSlotRow", "cloneConsentCheckbox",
-  "cloneNameInput", "cloneReplaceRow", "cloneReplacePills",
+  "cloneNameInput", "cloneReplaceRow", "cloneReplacePills", "optimizeCheckbox",
   "cancelCloneBtn", "useCloneBtn",
   "importDialog", "pastedScript", "scriptFileUpload", "cancelImportBtn", "loadScriptBtn",
 ].forEach((id) => { el[id] = document.getElementById(id); });
@@ -691,9 +692,32 @@ function encodeWav(samples, sampleRate) {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-// Decode any browser-supported audio and re-render as 24kHz mono WAV,
-// so the backend always receives a format it can read.
-async function toMonoWav(arrayBuffer) {
+function trimSilence(samples, rate) {
+  const threshold = 0.012;
+  const pad = Math.round(rate * 0.15);
+  let start = 0;
+  let end = samples.length - 1;
+  while (start < samples.length && Math.abs(samples[start]) < threshold) start += 1;
+  while (end > start && Math.abs(samples[end]) < threshold) end -= 1;
+  if (end - start < rate) return samples;  // mostly silence — leave it alone
+  return samples.slice(Math.max(0, start - pad), Math.min(samples.length, end + pad));
+}
+
+function normalizePeak(samples, target = 0.85) {
+  let peak = 0;
+  for (let i = 0; i < samples.length; i += 1) peak = Math.max(peak, Math.abs(samples[i]));
+  if (peak < 0.001 || peak >= target) return samples;
+  const gain = target / peak;
+  const out = new Float32Array(samples.length);
+  for (let i = 0; i < samples.length; i += 1) out[i] = samples[i] * gain;
+  return out;
+}
+
+// Decode any browser-supported audio and re-render as 24kHz mono WAV, so the
+// backend always receives a format it can read. With optimize: a high-pass at
+// 80Hz kills rumble and handling noise, then silence is trimmed and the peak
+// normalized so quiet laptop-mic takes arrive at a healthy level.
+async function toMonoWav(arrayBuffer, optimize) {
   const probe = new AudioContext();
   let decoded;
   try {
@@ -706,10 +730,22 @@ async function toMonoWav(arrayBuffer) {
   const offline = new OfflineAudioContext(1, frames, rate);
   const source = offline.createBufferSource();
   source.buffer = decoded;
-  source.connect(offline.destination);
+  if (optimize) {
+    const highpass = offline.createBiquadFilter();
+    highpass.type = "highpass";
+    highpass.frequency.value = 80;
+    source.connect(highpass);
+    highpass.connect(offline.destination);
+  } else {
+    source.connect(offline.destination);
+  }
   source.start();
   const rendered = await offline.startRendering();
-  return { blob: encodeWav(rendered.getChannelData(0), rate), duration: decoded.duration };
+  let samples = rendered.getChannelData(0);
+  if (optimize) {
+    samples = normalizePeak(trimSilence(samples, rate));
+  }
+  return { blob: encodeWav(samples, rate), duration: samples.length / rate };
 }
 
 function setCloneClip(blob, name, duration) {
@@ -790,8 +826,11 @@ let recordTicker = null;
 
 async function startRecording() {
   let stream;
+  const optimize = el.optimizeCheckbox.checked;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { noiseSuppression: optimize, echoCancellation: optimize, autoGainControl: optimize },
+    });
   } catch {
     el.cloneMeta.textContent = "Microphone access was denied — allow it in your browser, or upload a file instead.";
     el.clonePreview.hidden = false;
@@ -806,7 +845,8 @@ async function startRecording() {
     resetRecordButton();
     try {
       const raw = await new Blob(chunks).arrayBuffer();
-      const { blob, duration } = await toMonoWav(raw);
+      state.cloneRawBuffer = raw;
+      const { blob, duration } = await toMonoWav(raw, el.optimizeCheckbox.checked);
       setCloneClip(blob, "Recorded clip", duration);
     } catch {
       el.cloneMeta.textContent = "Could not process the recording — try again or upload a file.";
@@ -841,10 +881,13 @@ el.cloneFileInput.addEventListener("change", async () => {
     return;
   }
   try {
-    const { blob, duration } = await toMonoWav(await file.arrayBuffer());
+    const raw = await file.arrayBuffer();
+    const { blob, duration } = await toMonoWav(raw, el.optimizeCheckbox.checked);
+    state.cloneRawBuffer = raw;
     setCloneClip(blob, file.name, duration);
   } catch {
     // Undecodable in this browser — pass the raw file through; the backend may still read it.
+    state.cloneRawBuffer = null;
     state.cloneBlob = file;
     state.cloneName = file.name;
     state.cloneDuration = CLONE_GOOD_SECONDS;
@@ -857,12 +900,22 @@ el.cloneFileInput.addEventListener("change", async () => {
 
 el.cloneConsentCheckbox.addEventListener("change", updateCloneConfirm);
 
+// Re-apply (or undo) optimization on the captured clip when the box is toggled.
+el.optimizeCheckbox.addEventListener("change", async () => {
+  if (!state.cloneRawBuffer) return;
+  try {
+    const { blob, duration } = await toMonoWav(state.cloneRawBuffer, el.optimizeCheckbox.checked);
+    setCloneClip(blob, state.cloneName, duration);
+  } catch { /* keep the current clip */ }
+});
+
 function openCloneDialog(targetSlot) {
   state.cloneTargetSlot = Math.min(targetSlot, state.numSpeakers - 1);
   state.cloneBlob = null;
   state.cloneName = "";
   state.cloneDuration = 0;
   state.cloneReplaceId = null;
+  state.cloneRawBuffer = null;
   el.clonePreview.hidden = true;
   el.cloneAudio.removeAttribute("src");
   el.cloneMeta.textContent = "";

@@ -935,6 +935,16 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
 }
 @keyframes recPulse { 50% { opacity: 0.7; } }
 #recordBtn.recording { background: var(--error); border-color: var(--error); animation: recPulse 1.2s ease-in-out infinite; }
+.clone-optimize {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+  cursor: pointer;
+  margin-bottom: 14px;
+}
+.clone-optimize input { margin-top: 2px; flex-shrink: 0; }
 .clone-preview { margin-bottom: 14px; }
 .clone-preview audio { width: 100%; height: 34px; margin-bottom: 6px; }
 .clone-meta { font-size: 0.78rem; color: var(--ink-dim); }
