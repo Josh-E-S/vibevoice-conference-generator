@@ -1603,7 +1603,13 @@ el.generateBtn.addEventListener("click", async () => {
           buildSyncedTranscript(turnsSnapshot);
           el.dockEmpty.hidden = true;
           el.resultBlock.classList.add("visible");
-          state.wavePeaks = await decodeWavePeaks(url, 48);
+          try {
+            // Very long takes (hours of WAV) can exceed the browser's decode
+            // memory — the placeholder waveform is fine, never fail the take.
+            state.wavePeaks = await decodeWavePeaks(url, 48);
+          } catch {
+            state.wavePeaks = null;
+          }
           renderWave(0);
           openPlayerStage();
         }
