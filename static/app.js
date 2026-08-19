@@ -48,7 +48,7 @@ const state = {
   librarySearch: "",
   libraryFilter: "all",
   libraryTargetSlot: null,  // non-null: library picks a voice for this one slot
-  cloneTargetSlot: 0,
+  cloneTargetSlots: [],     // speaker slots the saved clone gets assigned to (0..4 of them)
   cloneBlob: null,
   cloneName: "",
   cloneDuration: 0,
@@ -80,7 +80,7 @@ const el = {};
   "logToggleBtn", "logBox",
   "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid", "libraryTitle",
   "cloneVoiceBtn", "cloneDialog", "closeCloneBtn", "recordBtn", "cloneFileInput", "recordTimer",
-  "clonePreview", "cloneAudio", "cloneMeta", "cloneConsentCheckbox",
+  "clonePreview", "cloneAudio", "cloneMeta", "cloneSlotRow", "cloneConsentCheckbox",
   "cloneNameInput", "cloneReplaceRow", "cloneReplacePills", "optimizeCheckbox",
   "readScriptToggle", "readScriptCard", "readScriptText", "readScriptMeta", "readScriptShuffle",
   "cancelCloneBtn", "useCloneBtn",
@@ -677,11 +677,11 @@ el.librarySearch.addEventListener("input", () => {
 // question and an exclamation in each (pitch range), varied sounds, and
 // ~25-30s when read at a comfortable pace.
 const READ_SCRIPTS = [
-  "Okay, so here's the thing about mornings: I always swear I'll get up early, and somehow the snooze button wins every single time. Last Tuesday I actually did it — coffee, a quick walk, the whole routine — and honestly? Best day I'd had in months. The air was cool, the streets were quiet, and for once nobody needed a single thing from me. Maybe tomorrow I'll try it again.",
-  "When I was about nine, my grandfather taught me to fish off the old wooden dock behind his house. He'd say, \"Patience isn't waiting — it's what you do while you wait.\" I had no idea what that meant back then. Now, every time I'm stuck in line or watching the kettle boil, I hear his voice again, and I catch myself smiling without meaning to.",
-  "You want to know the best meal I've ever had? A tiny noodle shop, eleven o'clock at night, rain hammering against the windows. Six seats, no menu, and a cook who never said a word. That broth changed my life! I've chased the flavor everywhere since — big cities, little towns, my own kitchen — and nothing has ever come close to it.",
-  "There's a particular hour just before sunset when everything slows down. The light turns gold, shadows stretch long across the yard, and even the birds seem to lower their voices. I like to sit outside then, with a cup of tea going cold beside me, and let my thoughts wander wherever they want. It never lasts long. Isn't that exactly why it matters?",
-  "Here's my confession: I talk to my plants. Not just a quick hello, either — full conversations. The fern gets encouragement, the cactus gets tough love, and the orchid? The orchid gets bribed. Does any of it work? Who knows! But they're all still alive, which is more than I can say for every plant I owned before, so I'm not changing a thing.",
+  "Okay, so here's the thing about mornings: I always swear I'll get up early, and somehow the snooze button wins every single time. Last Tuesday I actually did it — coffee, a quick walk, the whole routine — and honestly? Best day I'd had in months. The air was cool, the streets were quiet, and for once nobody needed a single thing from me. I watched the bakery on the corner pull its first trays out of the oven, and the smell alone was worth the alarm. So naturally, I told everyone I was a morning person now. That lasted exactly four days! But I keep coming back to it, because those quiet hours feel like borrowed time. Maybe tomorrow I'll try it again — no promises, though.",
+  "When I was about nine, my grandfather taught me to fish off the old wooden dock behind his house. He'd say, \"Patience isn't waiting — it's what you do while you wait.\" I had no idea what that meant back then. I just liked the sandwiches, and the way the water slapped against the posts. We'd sit for hours, mostly in silence, watching dragonflies stitch back and forth across the surface. Did we ever catch much? Almost never! One summer the biggest thing we pulled up was somebody's old boot, and he laughed so hard he nearly fell in. Now, every time I'm stuck in line or watching the kettle boil, I hear his voice again, and I catch myself smiling without meaning to. Funny how the smallest afternoons turn out to be the ones you keep.",
+  "You want to know the best meal I've ever had? A tiny noodle shop, eleven o'clock at night, rain hammering against the windows. Six seats, no menu, and a cook who never said a word. He just looked at you, nodded once, and started cooking. That broth changed my life! Rich and smoky and somehow gentle at the same time, with noodles he'd pulled by hand maybe ninety seconds earlier. I sat there dripping wet and completely happy, and I ordered a second bowl before I'd finished the first. I've chased that flavor everywhere since — big cities, little towns, my own kitchen at two in the morning — and nothing has ever come close. Some things only taste right once. The trick is knowing it while it's happening, and that night, I did.",
+  "There's a particular hour just before sunset when everything slows down. The light turns gold, shadows stretch long across the yard, and even the birds seem to lower their voices. I like to sit outside then, with a cup of tea going cold beside me, and let my thoughts wander wherever they want. Sometimes they drift to old friends, or to trips I still mean to take; sometimes they don't go anywhere at all, and that's fine too. The neighbor's dog usually wanders over, flops down on the warm stones, and sighs like he's had the longest day of anyone. Honestly, he might be right! Then the streetlights blink on, the cool air moves in, and the moment is over. It never lasts long. Isn't that exactly why it matters?",
+  "Here's my confession: I talk to my plants. Not just a quick hello, either — full conversations. The fern gets encouragement, the cactus gets tough love, and the orchid? The orchid gets bribed. I promise it better light, less draft, a bigger pot in the spring — whatever it takes, because it blooms exactly when it feels like it and not a moment sooner. My sister thinks I've completely lost the plot. She stood in my kitchen last month, listening to me thank the basil for pulling through a rough week, and just slowly shook her head. But does any of it work? Who knows! All I can tell you is that every single one of them is still alive, which is more than I can say for every plant I owned before, so I'm not changing a thing.",
 ];
 
 const CLONE_MIN_SECONDS = 5;        // hard floor
@@ -779,6 +779,38 @@ function cloneAtCapacity() {
   return state.customVoices.length >= MAX_CUSTOM_VOICES;
 }
 
+function updateCloneSaveLabel() {
+  const slots = state.cloneTargetSlots;
+  if (!slots.length) {
+    el.useCloneBtn.textContent = "Save voice";
+  } else if (slots.length === 1) {
+    el.useCloneBtn.textContent = `Save & use as Speaker ${slots[0] + 1}`;
+  } else {
+    const nums = [...slots].sort().map((i) => i + 1);
+    el.useCloneBtn.textContent =
+      `Save & use as Speakers ${nums.slice(0, -1).join(", ")} & ${nums[nums.length - 1]}`;
+  }
+}
+
+function renderCloneSlots() {
+  el.cloneSlotRow.innerHTML = "";
+  for (let i = 0; i < state.numSpeakers; i += 1) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "clone-slot-pill";
+    pill.textContent = `Speaker ${i + 1} · ${slotVoiceLabel(i)}`;
+    pill.classList.toggle("active", state.cloneTargetSlots.includes(i));
+    pill.addEventListener("click", () => {
+      state.cloneTargetSlots = state.cloneTargetSlots.includes(i)
+        ? state.cloneTargetSlots.filter((s) => s !== i)
+        : [...state.cloneTargetSlots, i];
+      renderCloneSlots();
+      updateCloneSaveLabel();
+    });
+    el.cloneSlotRow.append(pill);
+  }
+}
+
 function updateCloneConfirm() {
   el.useCloneBtn.disabled = !(
     state.cloneBlob &&
@@ -815,6 +847,7 @@ function resetRecordButton() {
   clearInterval(recordTicker);
   el.recordBtn.textContent = "● Record";
   el.recordBtn.classList.remove("recording");
+  el.recordTimer.classList.remove("rec-live");
   el.recordTimer.hidden = true;
 }
 
@@ -854,6 +887,7 @@ async function startRecording() {
   el.recordBtn.textContent = "■ Stop";
   el.recordBtn.classList.add("recording");
   el.recordTimer.hidden = false;
+  el.recordTimer.classList.add("rec-live");
   el.recordTimer.textContent = "0:00";
   clearInterval(recordTicker);
   recordTicker = setInterval(() => {
@@ -930,7 +964,9 @@ el.optimizeCheckbox.addEventListener("change", async () => {
 });
 
 function openCloneDialog(targetSlot = null) {
-  state.cloneTargetSlot = targetSlot === null ? null : Math.min(targetSlot, state.numSpeakers - 1);
+  // Default landing spot: the slot this dialog was opened for, else Speaker 1
+  // so a fresh clone always has a visible home. Deselect all to library-only.
+  state.cloneTargetSlots = [targetSlot === null ? 0 : Math.min(targetSlot, state.numSpeakers - 1)];
   state.cloneBlob = null;
   state.cloneName = "";
   state.cloneDuration = 0;
@@ -941,9 +977,8 @@ function openCloneDialog(targetSlot = null) {
   el.cloneMeta.textContent = "";
   el.cloneNameInput.value = "";
   el.cloneConsentCheckbox.checked = el.voiceConsentCheckbox.checked;
-  el.useCloneBtn.textContent = state.cloneTargetSlot === null
-    ? "Save voice"
-    : `Save & use as Speaker ${state.cloneTargetSlot + 1}`;
+  renderCloneSlots();
+  updateCloneSaveLabel();
   renderCloneReplacePills();
   updateCloneConfirm();
   el.cloneDialog.showModal();
@@ -985,9 +1020,9 @@ el.useCloneBtn.addEventListener("click", () => {
     state.customVoices.push(voice);
   }
   persistCustomVoice(voice);
-  if (state.cloneTargetSlot !== null) {
-    state.voiceSelections[state.cloneTargetSlot] = CUSTOM_PREFIX + voice.id;
-  }
+  state.cloneTargetSlots.forEach((i) => {
+    state.voiceSelections[i] = CUSTOM_PREFIX + voice.id;
+  });
   el.voiceConsentCheckbox.checked = el.cloneConsentCheckbox.checked;
   closeCloneDialog();
   renderCast();
