@@ -51,17 +51,26 @@ button, select, input, textarea { font-family: inherit; }
 }
 .wordmark {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   text-decoration: none;
   color: var(--ink);
 }
+.logo-mark {
+  width: 30px;
+  height: 27px;
+  flex-shrink: 0;
+  display: block;
+}
+.wordmark:hover .logo-mark rect { fill: var(--accent); transition: fill 0.25s; }
 .wordmark .mark {
   font-family: var(--font-serif);
   font-style: italic;
-  font-size: 1.8rem;
+  font-size: 2.15rem;
   letter-spacing: 0.02em;
+  line-height: 1;
 }
+.wordmark .brand-pill { align-self: center; margin-top: 4px; }
 .brand-pill {
   font-size: 0.66rem;
   font-weight: 700;
