@@ -974,6 +974,48 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
   padding: 10px 12px;
 }
 .clone-consent input { margin-top: 2px; flex-shrink: 0; }
+.clone-name-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--paper-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px 13px;
+  font-size: 0.88rem;
+  color: var(--ink);
+  margin-bottom: 14px;
+}
+.clone-name-input:focus { outline: none; border-color: #d9a98c; }
+
+.library-section-label {
+  grid-column: 1 / -1;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 4px 0 -4px;
+}
+.voice-card-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.voice-mini-action {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.voice-mini-action:hover { color: var(--accent); }
+.voice-rename-input {
+  border: 1px solid var(--border-strong);
+  background: var(--paper-soft);
+  border-radius: 7px;
+  padding: 3px 8px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--ink);
+  width: 140px;
+}
+.voice-rename-input:focus { outline: none; border-color: #d9a98c; }
 
 /* ---------------- About dialog ---------------- */
 #aboutDialog .dialog-body { max-height: 70vh; overflow-y: auto; }

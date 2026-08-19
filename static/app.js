@@ -27,7 +27,9 @@ const PRIMARY_STAGE_MESSAGES = {
 const QUALITY_LABELS = { "VibeVoice-1.5B": "Fast", "VibeVoice-7B": "Best" };
 const GENDER_LABELS = { F: "Feminine", M: "Masculine" };
 const SPEAKER_FALLBACK_COLORS = ["#e2582a", "#2f6f63", "#cc8a2e", "#7b4b94"];
-const CUSTOM_VOICE_VALUE = "__custom__";
+const CUSTOM_PREFIX = "custom:";
+const CUSTOM_COLORS = ["#8a5a44", "#4a6b8a", "#7b5e7d", "#5e7b60"];
+const MAX_CUSTOM_VOICES = 4;
 const MAX_CUSTOM_AUDIO_BYTES = 15 * 1024 * 1024;
 
 const state = {
@@ -35,7 +37,7 @@ const state = {
   numSpeakers: 2,
   voices: [],
   voiceSelections: [null, null, null, null],
-  customVoiceFiles: [null, null, null, null],
+  customVoices: [],  // saved clones: {id, name, duration, blob, url, createdAt}
   models: [],
   model: null,
   examples: [],
@@ -50,6 +52,7 @@ const state = {
   cloneBlob: null,
   cloneName: "",
   cloneDuration: 0,
+  cloneReplaceId: null,     // when the voice library is full: which saved voice to override
   mediaRecorder: null,
   resultTurns: [],       // snapshot of turns for the synced transcript
   resultTitle: "",
@@ -77,6 +80,7 @@ const el = {};
   "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid", "libraryTitle",
   "cloneVoiceBtn", "cloneDialog", "closeCloneBtn", "recordBtn", "cloneFileInput", "recordTimer",
   "clonePreview", "cloneAudio", "cloneMeta", "cloneSlotRow", "cloneConsentCheckbox",
+  "cloneNameInput", "cloneReplaceRow", "cloneReplacePills",
   "cancelCloneBtn", "useCloneBtn",
   "importDialog", "pastedScript", "scriptFileUpload", "cancelImportBtn", "loadScriptBtn",
 ].forEach((id) => { el[id] = document.getElementById(id); });
@@ -91,7 +95,20 @@ function voiceByName(name) {
 }
 
 function isCustomVoice(i) {
-  return state.voiceSelections[i] === CUSTOM_VOICE_VALUE;
+  return (state.voiceSelections[i] || "").startsWith(CUSTOM_PREFIX);
+}
+
+function customVoiceById(id) {
+  return state.customVoices.find((v) => v.id === id) || null;
+}
+
+function customVoiceForSlot(i) {
+  return isCustomVoice(i) ? customVoiceById(state.voiceSelections[i].slice(CUSTOM_PREFIX.length)) : null;
+}
+
+function customColor(voice) {
+  const idx = state.customVoices.indexOf(voice);
+  return CUSTOM_COLORS[Math.max(0, idx) % CUSTOM_COLORS.length];
 }
 
 function anyCustomVoiceActive() {
@@ -99,14 +116,60 @@ function anyCustomVoiceActive() {
 }
 
 function slotColor(i) {
-  if (isCustomVoice(i)) return SPEAKER_FALLBACK_COLORS[i];
+  if (isCustomVoice(i)) {
+    const voice = customVoiceForSlot(i);
+    return voice ? customColor(voice) : SPEAKER_FALLBACK_COLORS[i];
+  }
   const voice = voiceByName(state.voiceSelections[i]);
   return voice ? voice.color : SPEAKER_FALLBACK_COLORS[i];
 }
 
 function slotVoiceLabel(i) {
-  if (isCustomVoice(i)) return "Custom voice";
+  if (isCustomVoice(i)) {
+    const voice = customVoiceForSlot(i);
+    return voice ? voice.name : "Custom voice";
+  }
   return state.voiceSelections[i] || `Voice ${i + 1}`;
+}
+
+/* ---- Saved clone persistence (IndexedDB: survives reloads, stays on this device) ---- */
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("chorus-voices", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("voices", { keyPath: "id" });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbRequest(mode, fn) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const req = fn(db.transaction("voices", mode).objectStore("voices"));
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function loadCustomVoices() {
+  try {
+    const rows = await idbRequest("readonly", (s) => s.getAll());
+    rows.sort((a, b) => a.createdAt - b.createdAt);
+    state.customVoices = rows.map((r) => ({ ...r, url: URL.createObjectURL(r.blob) }));
+  } catch {
+    state.customVoices = [];  // private mode etc. — clones work, just don't survive reload
+  }
+}
+
+async function persistCustomVoice(v) {
+  try {
+    await idbRequest("readwrite", (s) =>
+      s.put({ id: v.id, name: v.name, duration: v.duration, createdAt: v.createdAt, blob: v.blob }));
+  } catch { /* in-memory only */ }
+}
+
+async function removeCustomVoiceRecord(id) {
+  try { await idbRequest("readwrite", (s) => s.delete(id)); } catch { /* in-memory only */ }
 }
 
 function estimateDuration(turns) {
@@ -176,17 +239,26 @@ function refreshPreviewButtons() {
   });
 }
 
-function playVoicePreview(name) {
-  if (state.playingVoice === name) {
+function previewSrcFor(key) {
+  if (key.startsWith(CUSTOM_PREFIX)) {
+    const voice = customVoiceById(key.slice(CUSTOM_PREFIX.length));
+    return voice ? voice.url : null;
+  }
+  const voice = voiceByName(key);
+  return voice ? voice.preview_url : null;
+}
+
+function playVoicePreview(key) {
+  if (state.playingVoice === key) {
     state.previewAudio.pause();
     state.playingVoice = null;
     refreshPreviewButtons();
     return;
   }
-  const voice = voiceByName(name);
-  if (!voice) return;
-  state.previewAudio.src = voice.preview_url;
-  state.playingVoice = name;
+  const src = previewSrcFor(key);
+  if (!src) return;
+  state.previewAudio.src = src;
+  state.playingVoice = key;
   refreshPreviewButtons();
   state.previewAudio.play().catch((err) => {
     state.playingVoice = null;
@@ -237,7 +309,8 @@ function renderCast() {
     const meta = document.createElement("div");
     meta.className = "slot-meta";
     if (isCustomVoice(i)) {
-      meta.textContent = state.customVoiceFiles[i] ? state.customVoiceFiles[i].name : "Upload a clip below";
+      const voice = customVoiceForSlot(i);
+      meta.textContent = voice ? `Cloned voice · ${Math.round(voice.duration)}s` : "Clip missing — re-record";
     } else {
       const voice = voiceByName(state.voiceSelections[i]);
       meta.textContent = voice ? [GENDER_LABELS[voice.gender], ...(voice.tags || [])].join(" · ") : "";
@@ -245,7 +318,7 @@ function renderCast() {
     info.append(name, meta);
     card.append(dot, info);
 
-    if (!isCustomVoice(i) && state.voiceSelections[i]) {
+    if (state.voiceSelections[i] && previewSrcFor(state.voiceSelections[i])) {
       const playBtn = document.createElement("button");
       playBtn.type = "button";
       playBtn.className = "voice-play";
@@ -265,7 +338,7 @@ function renderCast() {
 
     el.voiceRows.append(card);
 
-    if (isCustomVoice(i) && !state.customVoiceFiles[i]) {
+    if (isCustomVoice(i) && !customVoiceForSlot(i)) {
       const uploadRow = document.createElement("div");
       uploadRow.className = "custom-voice-row";
       const fixBtn = document.createElement("button");
@@ -372,15 +445,134 @@ function makeSlotAssignRow(isAssigned, assignedColor, onAssign) {
 
 function assignVoiceToSlot(i, value) {
   state.voiceSelections[i] = value;
-  if (value !== CUSTOM_VOICE_VALUE) state.customVoiceFiles[i] = null;
   renderCast();
   renderTurns();
   renderLibraryGrid();
 }
 
+function makeUseVoiceButton(slot, key) {
+  const useBtn = document.createElement("button");
+  useBtn.type = "button";
+  useBtn.className = "btn btn-accent use-voice-btn";
+  const current = state.voiceSelections[slot] === key;
+  useBtn.textContent = current ? "Current voice" : "Use voice";
+  useBtn.disabled = current;
+  useBtn.addEventListener("click", () => {
+    assignVoiceToSlot(slot, key);
+    el.voiceLibraryDialog.close();
+  });
+  return useBtn;
+}
+
+function deleteCustomVoice(voice) {
+  state.customVoices = state.customVoices.filter((v) => v !== voice);
+  URL.revokeObjectURL(voice.url);
+  removeCustomVoiceRecord(voice.id);
+  const key = CUSTOM_PREFIX + voice.id;
+  state.voiceSelections = state.voiceSelections.map((sel) => (sel === key ? null : sel));
+  renderCast();
+  renderTurns();
+  renderLibraryGrid();
+}
+
+function buildCustomVoiceCard(voice) {
+  const key = CUSTOM_PREFIX + voice.id;
+  const card = document.createElement("div");
+  card.className = "voice-card";
+
+  const avatar = document.createElement("span");
+  avatar.className = "voice-avatar";
+  avatar.style.background = customColor(voice);
+  avatar.textContent = (voice.name || "?")[0].toUpperCase();
+
+  const body = document.createElement("div");
+  body.className = "voice-card-body";
+
+  const head = document.createElement("div");
+  head.className = "voice-card-head";
+  const name = document.createElement("span");
+  name.className = "voice-card-name";
+  name.textContent = voice.name;
+
+  const actions = document.createElement("span");
+  actions.className = "voice-card-actions";
+  const preview = document.createElement("button");
+  preview.type = "button";
+  preview.className = "voice-preview-link";
+  preview.dataset.voice = key;
+  preview.textContent = "Preview";
+  preview.addEventListener("click", () => playVoicePreview(key));
+
+  const renameBtn = document.createElement("button");
+  renameBtn.type = "button";
+  renameBtn.className = "voice-mini-action";
+  renameBtn.textContent = "✎";
+  renameBtn.title = "Rename";
+  renameBtn.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.className = "voice-rename-input";
+    input.value = voice.name;
+    input.maxLength = 40;
+    name.replaceWith(input);
+    input.focus();
+    input.select();
+    const commit = () => {
+      voice.name = input.value.trim() || voice.name;
+      persistCustomVoice(voice);
+      renderCast();
+      renderTurns();
+      renderLibraryGrid();
+    };
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+  });
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "voice-mini-action";
+  deleteBtn.textContent = "✕";
+  deleteBtn.title = "Delete this voice";
+  deleteBtn.addEventListener("click", () => deleteCustomVoice(voice));
+
+  actions.append(preview, renameBtn, deleteBtn);
+  head.append(name, actions);
+
+  const meta = document.createElement("div");
+  meta.className = "voice-card-meta";
+  meta.textContent = `Cloned voice · ${Math.round(voice.duration)}s`;
+
+  const slot = state.libraryTargetSlot;
+  if (slot === null) {
+    body.append(head, meta, makeSlotAssignRow(
+      (i) => state.voiceSelections[i] === key,
+      () => customColor(voice),
+      (i) => assignVoiceToSlot(i, key),
+    ));
+  } else {
+    body.append(head, meta, makeUseVoiceButton(slot, key));
+  }
+  card.append(avatar, body);
+  return card;
+}
+
+function librarySectionLabel(text) {
+  const label = document.createElement("div");
+  label.className = "library-section-label";
+  label.textContent = text;
+  return label;
+}
+
 function renderLibraryGrid() {
   el.libraryGrid.innerHTML = "";
   const q = state.librarySearch.trim().toLowerCase();
+
+  const myVoices = state.customVoices.filter((v) => !q || v.name.toLowerCase().includes(q));
+  if (myVoices.length && state.libraryFilter === "all") {
+    el.libraryGrid.append(librarySectionLabel("My voices"));
+    myVoices.forEach((v) => el.libraryGrid.append(buildCustomVoiceCard(v)));
+    el.libraryGrid.append(librarySectionLabel("Presets"));
+  }
+
   const filtered = state.voices.filter((v) => {
     const matchesSearch = !q || v.name.toLowerCase().includes(q);
     const matchesFilter =
@@ -428,17 +620,7 @@ function renderLibraryGrid() {
       ));
     } else {
       // Slot-first mode: one click puts this voice in the target slot.
-      const useBtn = document.createElement("button");
-      useBtn.type = "button";
-      useBtn.className = "btn btn-accent use-voice-btn";
-      const current = state.voiceSelections[slot] === voice.name;
-      useBtn.textContent = current ? "Current voice" : "Use voice";
-      useBtn.disabled = current;
-      useBtn.addEventListener("click", () => {
-        assignVoiceToSlot(slot, voice.name);
-        el.voiceLibraryDialog.close();
-      });
-      body.append(head, meta, useBtn);
+      body.append(head, meta, makeUseVoiceButton(slot, voice.name));
     }
     card.append(avatar, body);
     el.libraryGrid.append(card);
@@ -545,12 +727,36 @@ function setCloneClip(blob, name, duration) {
   updateCloneConfirm();
 }
 
+function cloneAtCapacity() {
+  return state.customVoices.length >= MAX_CUSTOM_VOICES;
+}
+
 function updateCloneConfirm() {
   el.useCloneBtn.disabled = !(
     state.cloneBlob &&
     state.cloneDuration >= CLONE_MIN_SECONDS &&
-    el.cloneConsentCheckbox.checked
+    el.cloneConsentCheckbox.checked &&
+    (!cloneAtCapacity() || state.cloneReplaceId)
   );
+}
+
+function renderCloneReplacePills() {
+  el.cloneReplaceRow.hidden = !cloneAtCapacity();
+  el.cloneReplacePills.innerHTML = "";
+  if (!cloneAtCapacity()) return;
+  state.customVoices.forEach((v) => {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "clone-slot-pill";
+    pill.textContent = v.name;
+    pill.classList.toggle("active", v.id === state.cloneReplaceId);
+    pill.addEventListener("click", () => {
+      state.cloneReplaceId = v.id;
+      renderCloneReplacePills();
+      updateCloneConfirm();
+    });
+    el.cloneReplacePills.append(pill);
+  });
 }
 
 function renderCloneSlots() {
@@ -656,11 +862,14 @@ function openCloneDialog(targetSlot) {
   state.cloneBlob = null;
   state.cloneName = "";
   state.cloneDuration = 0;
+  state.cloneReplaceId = null;
   el.clonePreview.hidden = true;
   el.cloneAudio.removeAttribute("src");
   el.cloneMeta.textContent = "";
+  el.cloneNameInput.value = "";
   el.cloneConsentCheckbox.checked = el.voiceConsentCheckbox.checked;
   renderCloneSlots();
+  renderCloneReplacePills();
   updateCloneConfirm();
   el.cloneDialog.showModal();
 }
@@ -677,11 +886,31 @@ el.cancelCloneBtn.addEventListener("click", closeCloneDialog);
 el.cloneDialog.addEventListener("click", (e) => { if (e.target === el.cloneDialog) closeCloneDialog(); });
 
 el.useCloneBtn.addEventListener("click", () => {
-  const i = state.cloneTargetSlot;
-  const ext = state.cloneBlob.type === "audio/wav" ? ".wav" : "";
-  const base = state.cloneName === "Recorded clip" ? `recorded-voice${ext}` : state.cloneName;
-  state.customVoiceFiles[i] = new File([state.cloneBlob], base, { type: state.cloneBlob.type });
-  state.voiceSelections[i] = CUSTOM_VOICE_VALUE;
+  const typed = el.cloneNameInput.value.trim();
+  const fromFile = state.cloneName && state.cloneName !== "Recorded clip"
+    ? state.cloneName.replace(/\.[a-z0-9]+$/i, "")
+    : "";
+  const name = typed || fromFile || `My voice ${state.customVoices.length + 1}`;
+
+  const existing = state.cloneReplaceId ? customVoiceById(state.cloneReplaceId) : null;
+  let voice;
+  if (existing) {
+    URL.revokeObjectURL(existing.url);
+    Object.assign(existing, {
+      name, duration: state.cloneDuration, blob: state.cloneBlob,
+      url: URL.createObjectURL(state.cloneBlob),
+    });
+    voice = existing;
+  } else {
+    voice = {
+      id: crypto.randomUUID(), name,
+      duration: state.cloneDuration, blob: state.cloneBlob,
+      url: URL.createObjectURL(state.cloneBlob), createdAt: Date.now(),
+    };
+    state.customVoices.push(voice);
+  }
+  persistCustomVoice(voice);
+  state.voiceSelections[state.cloneTargetSlot] = CUSTOM_PREFIX + voice.id;
   el.voiceConsentCheckbox.checked = el.cloneConsentCheckbox.checked;
   closeCloneDialog();
   renderCast();
@@ -691,8 +920,8 @@ el.useCloneBtn.addEventListener("click", () => {
 /* ---------------- Turn editor ---------------- */
 function speakerChoiceLabel(i) {
   const sel = state.voiceSelections[i];
-  if (sel === CUSTOM_VOICE_VALUE) return `Speaker ${i + 1} · Custom voice`;
-  return sel ? `Speaker ${i + 1} · ${sel}` : `Speaker ${i + 1}`;
+  if (!sel) return `Speaker ${i + 1}`;
+  return `Speaker ${i + 1} · ${slotVoiceLabel(i)}`;
 }
 
 function renderTurns() {
@@ -796,9 +1025,11 @@ el.composerCollapsedStrip.addEventListener("click", () => setComposerCollapsed(f
 function loadScriptResult(result, titleFallback, summary) {
   state.turns = result.turns;
   state.numSpeakers = result.num_speakers;
-  const voices = (result.voices || []).slice(0, 4);
-  while (voices.length < 4) voices.push(null);
-  state.voiceSelections = voices;
+  const suggested = (result.voices || []).slice(0, 4);
+  while (suggested.length < 4) suggested.push(null);
+  // Keep the user's cloned-voice assignments; only refresh preset suggestions.
+  state.voiceSelections = state.voiceSelections.map((current, i) =>
+    (current || "").startsWith(CUSTOM_PREFIX) ? current : suggested[i]);
   el.scriptTitle.textContent = result.title || titleFallback || "Untitled conversation";
   renderCast();
   renderTurns();
@@ -1157,8 +1388,8 @@ el.generateBtn.addEventListener("click", async () => {
   }
 
   for (let i = 0; i < state.numSpeakers; i += 1) {
-    if (isCustomVoice(i) && !state.customVoiceFiles[i]) {
-      alert(`Upload a voice clip for Speaker ${i + 1}, or pick a preset voice instead.`);
+    if (isCustomVoice(i) && !customVoiceForSlot(i)) {
+      alert(`Speaker ${i + 1}'s cloned voice is missing its clip — re-record it or pick a preset voice.`);
       return;
     }
   }
@@ -1186,11 +1417,10 @@ el.generateBtn.addEventListener("click", async () => {
   let customAudio;
   try {
     customAudio = await Promise.all(
-      Array.from({ length: 4 }, (_, i) =>
-        i < state.numSpeakers && isCustomVoice(i) && state.customVoiceFiles[i]
-          ? fileToBase64(state.customVoiceFiles[i])
-          : Promise.resolve(null)
-      )
+      Array.from({ length: 4 }, (_, i) => {
+        const voice = i < state.numSpeakers ? customVoiceForSlot(i) : null;
+        return voice ? fileToBase64(voice.blob) : Promise.resolve(null);
+      })
     );
   } catch (error) {
     setStatus("error", error.message);
@@ -1203,7 +1433,7 @@ el.generateBtn.addEventListener("click", async () => {
     model: state.model,
     num_speakers: state.numSpeakers,
     turns: state.turns,
-    speakers: state.voiceSelections.map((v) => (v === CUSTOM_VOICE_VALUE ? null : v)),
+    speakers: state.voiceSelections.map((v) => ((v || "").startsWith(CUSTOM_PREFIX) ? null : v)),
     cfg_scale: Number(el.cfgScale.value),
     custom_audio: customAudio,
     voice_consent: el.voiceConsentCheckbox.checked,
@@ -1283,6 +1513,7 @@ async function init() {
     fetch("/api/voices").then((r) => r.json()),
     fetch("/api/examples").then((r) => r.json()),
     fetch("/api/duration-options").then((r) => r.json()),
+    loadCustomVoices(),
   ]);
   state.models = models;
   state.model = models[0] || null;

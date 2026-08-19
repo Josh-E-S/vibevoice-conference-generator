@@ -225,8 +225,14 @@
           <audio id="cloneAudio" controls></audio>
           <div id="cloneMeta" class="clone-meta"></div>
         </div>
+        <div class="clone-section-label">Voice name</div>
+        <input id="cloneNameInput" class="clone-name-input" maxlength="40" placeholder="e.g. Josh, Grandma Ruth, Movie Trailer Guy" />
         <div class="clone-section-label">Use as</div>
         <div id="cloneSlotRow" class="clone-slots"></div>
+        <div id="cloneReplaceRow" hidden>
+          <div class="clone-section-label">Voice library full — choose one to replace</div>
+          <div id="cloneReplacePills" class="clone-slots"></div>
+        </div>
         <label class="clone-consent">
           <input type="checkbox" id="cloneConsentCheckbox" />
           I have the right to use this voice and will disclose this audio as synthetic.
