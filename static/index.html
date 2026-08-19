@@ -214,8 +214,10 @@
         </div>
         <p>
           Record or upload <strong>15–30 seconds</strong> of one person speaking clearly, with no
-          background noise or music. That voice becomes one of your speakers.
+          background noise or music.
         </p>
+        <div class="clone-section-label">Voice name</div>
+        <input id="cloneNameInput" class="clone-name-input" maxlength="40" placeholder="e.g. Josh, Grandma Ruth, Movie Trailer Guy" />
         <div class="clone-capture">
           <button id="recordBtn" class="btn btn-accent" type="button">● Record</button>
           <label class="btn clone-upload-label">Upload file<input id="cloneFileInput" type="file" accept="audio/*" hidden /></label>
@@ -229,18 +231,14 @@
             <button id="readScriptShuffle" type="button">↻ Try another</button>
           </div>
         </div>
-        <label class="clone-optimize">
-          <input type="checkbox" id="optimizeCheckbox" checked />
-          Optimize audio — suppress mic noise, trim silence, remove rumble, level the volume
-        </label>
         <div id="clonePreview" class="clone-preview" hidden>
           <audio id="cloneAudio" controls></audio>
           <div id="cloneMeta" class="clone-meta"></div>
         </div>
-        <div class="clone-section-label">Voice name</div>
-        <input id="cloneNameInput" class="clone-name-input" maxlength="40" placeholder="e.g. Josh, Grandma Ruth, Movie Trailer Guy" />
-        <div class="clone-section-label">Use as</div>
-        <div id="cloneSlotRow" class="clone-slots"></div>
+        <label class="clone-optimize">
+          <input type="checkbox" id="optimizeCheckbox" checked />
+          Optimize audio — suppress mic noise, trim silence, remove rumble, level the volume
+        </label>
         <div id="cloneReplaceRow" hidden>
           <div class="clone-section-label">Voice library full — choose one to replace</div>
           <div id="cloneReplacePills" class="clone-slots"></div>

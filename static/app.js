@@ -80,7 +80,7 @@ const el = {};
   "logToggleBtn", "logBox",
   "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid", "libraryTitle",
   "cloneVoiceBtn", "cloneDialog", "closeCloneBtn", "recordBtn", "cloneFileInput", "recordTimer",
-  "clonePreview", "cloneAudio", "cloneMeta", "cloneSlotRow", "cloneConsentCheckbox",
+  "clonePreview", "cloneAudio", "cloneMeta", "cloneConsentCheckbox",
   "cloneNameInput", "cloneReplaceRow", "cloneReplacePills", "optimizeCheckbox",
   "readScriptToggle", "readScriptCard", "readScriptText", "readScriptMeta", "readScriptShuffle",
   "cancelCloneBtn", "useCloneBtn",
@@ -652,7 +652,7 @@ function renderLibraryGrid() {
   cloneBtn.addEventListener("click", () => {
     const target = state.libraryTargetSlot;
     el.voiceLibraryDialog.close();
-    openCloneDialog(target === null ? 0 : target);
+    openCloneDialog(target);
   });
   cloneBody.append(cloneHead, cloneMeta, cloneBtn);
   clone.append(cloneAvatar, cloneBody);
@@ -807,22 +807,6 @@ function renderCloneReplacePills() {
   });
 }
 
-function renderCloneSlots() {
-  el.cloneSlotRow.innerHTML = "";
-  for (let i = 0; i < state.numSpeakers; i += 1) {
-    const pill = document.createElement("button");
-    pill.type = "button";
-    pill.className = "clone-slot-pill";
-    pill.textContent = `Speaker ${i + 1} · ${slotVoiceLabel(i)}`;
-    pill.classList.toggle("active", i === state.cloneTargetSlot);
-    pill.addEventListener("click", () => {
-      state.cloneTargetSlot = i;
-      renderCloneSlots();
-    });
-    el.cloneSlotRow.append(pill);
-  }
-}
-
 function stopRecording() {
   if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") state.mediaRecorder.stop();
 }
@@ -945,8 +929,8 @@ el.optimizeCheckbox.addEventListener("change", async () => {
   } catch { /* keep the current clip */ }
 });
 
-function openCloneDialog(targetSlot) {
-  state.cloneTargetSlot = Math.min(targetSlot, state.numSpeakers - 1);
+function openCloneDialog(targetSlot = null) {
+  state.cloneTargetSlot = targetSlot === null ? null : Math.min(targetSlot, state.numSpeakers - 1);
   state.cloneBlob = null;
   state.cloneName = "";
   state.cloneDuration = 0;
@@ -957,7 +941,9 @@ function openCloneDialog(targetSlot) {
   el.cloneMeta.textContent = "";
   el.cloneNameInput.value = "";
   el.cloneConsentCheckbox.checked = el.voiceConsentCheckbox.checked;
-  renderCloneSlots();
+  el.useCloneBtn.textContent = state.cloneTargetSlot === null
+    ? "Save voice"
+    : `Save & use as Speaker ${state.cloneTargetSlot + 1}`;
   renderCloneReplacePills();
   updateCloneConfirm();
   el.cloneDialog.showModal();
@@ -969,7 +955,7 @@ function closeCloneDialog() {
   el.cloneDialog.close();
 }
 
-el.cloneVoiceBtn.addEventListener("click", () => openCloneDialog(0));
+el.cloneVoiceBtn.addEventListener("click", () => openCloneDialog(null));
 el.closeCloneBtn.addEventListener("click", closeCloneDialog);
 el.cancelCloneBtn.addEventListener("click", closeCloneDialog);
 el.cloneDialog.addEventListener("click", (e) => { if (e.target === el.cloneDialog) closeCloneDialog(); });
@@ -999,7 +985,9 @@ el.useCloneBtn.addEventListener("click", () => {
     state.customVoices.push(voice);
   }
   persistCustomVoice(voice);
-  state.voiceSelections[state.cloneTargetSlot] = CUSTOM_PREFIX + voice.id;
+  if (state.cloneTargetSlot !== null) {
+    state.voiceSelections[state.cloneTargetSlot] = CUSTOM_PREFIX + voice.id;
+  }
   el.voiceConsentCheckbox.checked = el.cloneConsentCheckbox.checked;
   closeCloneDialog();
   renderCast();
