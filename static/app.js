@@ -22,6 +22,7 @@ const PRIMARY_STAGE_MESSAGES = {
   processing_audio: ["Finalizing", "Converting tensors into a playable waveform."],
   complete: ["Complete", "Press play, or download the WAV."],
   error: ["Error", "Check the log for details."],
+  cancelled: ["Stopped", "Generation cancelled. The next run may need a cold start."],
 };
 
 const QUALITY_LABELS = { "VibeVoice-1.5B": "Fast", "VibeVoice-7B": "Best" };
@@ -69,7 +70,7 @@ const el = {};
   "scriptPrompt", "durationSelect", "generateScriptBtn", "examplePills", "openImportBtn", "scriptGenStatus",
   "scriptTitle", "scriptDuration", "turnsList", "addTurnBtn",
   "generateBarMeta", "generateBtn",
-  "statusCard", "statusTitle", "statusDesc",
+  "statusCard", "statusTitle", "statusDesc", "stopGenBtn",
   "dockEmpty", "resultBlock", "resultWaveform", "resultAudio",
   "playBtn", "playerTime", "syncedTranscript", "openPlayerBtn",
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
@@ -1469,13 +1470,20 @@ function nextParodyLine() {
 
 function setStatus(stage, fallbackText) {
   const [title, defaultDesc] = PRIMARY_STAGE_MESSAGES[stage] || ["Working", "Processing..."];
+  const running = stage !== "complete" && stage !== "error" && stage !== "cancelled";
   el.statusCard.classList.add("visible");
-  el.statusCard.classList.toggle("active", stage !== "complete" && stage !== "error");
+  el.statusCard.classList.toggle("active", running);
   el.statusCard.classList.toggle("complete", stage === "complete");
-  el.statusCard.classList.toggle("error", stage === "error");
+  el.statusCard.classList.toggle("error", stage === "error" || stage === "cancelled");
   el.statusTitle.textContent = title;
   el.statusDesc.textContent = fallbackText || defaultDesc || "";
+  el.stopGenBtn.hidden = !running;
 }
+
+let generateAbort = null;
+el.stopGenBtn.addEventListener("click", () => {
+  if (generateAbort) generateAbort.abort();
+});
 
 el.logToggleBtn.addEventListener("click", () => {
   const visible = el.logBox.classList.toggle("visible");
@@ -1551,11 +1559,13 @@ el.generateBtn.addEventListener("click", async () => {
     voice_consent: el.voiceConsentCheckbox.checked,
   };
 
+  generateAbort = new AbortController();
   try {
     const response = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: generateAbort.signal,
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
@@ -1616,9 +1626,14 @@ el.generateBtn.addEventListener("click", async () => {
       }
     }
   } catch (error) {
-    setStatus("error", error.message);
+    if (error.name === "AbortError") {
+      setStatus("cancelled");
+    } else {
+      setStatus("error", error.message);
+    }
     el.dockEmpty.hidden = false;
   } finally {
+    generateAbort = null;
     el.generateBtn.disabled = false;
     el.generateBtn.textContent = "Generate Audio";
   }
