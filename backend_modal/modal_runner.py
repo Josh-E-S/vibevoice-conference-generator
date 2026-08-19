@@ -258,7 +258,10 @@ class VibeVoiceModel:
     # solo-vs-batched; seams inaudible with a 0.25 s crossfade). Validation
     # record: LongFlow experiments/p1_flow_head/NOTES.md, Gate Nights 4-5.
     CHUNK_TARGET_WORDS = 200          # ~80-90 s of audio per chunk
-    CHUNK_MIN_SCRIPT_WORDS = 350      # below this, monolithic is fine
+    CHUNK_MIN_SCRIPT_WORDS = 250      # was 350; ear-check 2026-08-19 found audible
+                                      # rate/volume drift (N8) already at 292 words
+                                      # (~98 s) rendered single-pass — drift onset
+                                      # beats seam risk well below the old gate
     CROSSFADE_S = 0.25                # GN5 ear-validated
     # Ambitious caps: with OOM backoff (waves split in half and retry), an
     # overshoot costs one halving, never the job. Validated floors were 8/4.
@@ -271,44 +274,55 @@ class VibeVoiceModel:
         Never splits inside a normal turn (turn boundaries are what keep pacing
         natural and identity anchored), so each chunk is itself a valid
         mini-script for the same speaker set. The one exception is an OVERSIZED
-        turn — a monologue well past CHUNK_TARGET_WORDS. Without splitting it
-        at sentence boundaries, a solo script (often a single giant turn) can
-        never batch and renders single-pass at sub-realtime no matter how long
-        it is. Mid-monologue seams get the same 0.25 s crossfade and per-chunk
-        quality gate as turn seams.
+        turn — a monologue past ~1.25x CHUNK_TARGET_WORDS. Rendered whole, long
+        monologues exhibit the N8 rate/volume drift (ear-confirmed at 292 words:
+        speeds up and gets quieter toward the end), so they are sentence-split
+        into EVEN pieces which become atomic chunks (never re-grouped). Seams
+        get the same 0.25 s crossfade and per-chunk quality gate as turn seams.
         """
         import re as _re
-        expanded = []
-        for line in turn_lines:
-            if len(line.split()) <= int(cls.CHUNK_TARGET_WORDS * 1.5):
-                expanded.append(line)
-                continue
+        oversize = int(cls.CHUNK_TARGET_WORDS * 1.25)
+
+        def split_oversized(line):
             m = _re.match(r"^(Speaker\s+\d+\s*:)\s*(.*)$", line, _re.S | _re.I)
             tag, body = (m.group(1), m.group(2)) if m else ("Speaker 1:", line)
             sentences = [s for s in _re.split(r"(?<=[.!?…])\s+", body) if s.strip()]
-            cur_s, cur_w = [], 0
-            pieces = []
+            if len(sentences) < 2:
+                return [line]  # no sentence boundaries to split on
+            words = len(body.split())
+            n_pieces = max(2, round(words / cls.CHUNK_TARGET_WORDS))
+            piece_target = words / n_pieces
+            pieces, cur_s, cur_w = [], [], 0
             for sentence in sentences:
                 cur_s.append(sentence)
                 cur_w += len(sentence.split())
-                if cur_w >= cls.CHUNK_TARGET_WORDS:
+                if cur_w >= piece_target and len(pieces) < n_pieces - 1:
                     pieces.append(f"{tag} {' '.join(cur_s)}")
                     cur_s, cur_w = [], 0
             if cur_s:
-                # tiny tail: fold into the previous piece of the same turn
-                if pieces and cur_w < cls.CHUNK_TARGET_WORDS // 3:
-                    pieces[-1] = pieces[-1] + " " + " ".join(cur_s)
-                else:
-                    pieces.append(f"{tag} {' '.join(cur_s)}")
-            expanded.extend(pieces if pieces else [line])
+                pieces.append(f"{tag} {' '.join(cur_s)}")
+            return pieces
 
         chunks, cur, cur_words = [], [], 0
-        for line in expanded:
-            cur.append(line)
-            cur_words += len(line.split())
-            if cur_words >= cls.CHUNK_TARGET_WORDS:
+
+        def flush():
+            nonlocal cur, cur_words
+            if cur:
                 chunks.append("\n".join(cur))
                 cur, cur_words = [], 0
+
+        for line in turn_lines:
+            words = len(line.split())
+            if words > oversize:
+                pieces = split_oversized(line)
+                if len(pieces) > 1:
+                    flush()
+                    chunks.extend(pieces)
+                    continue
+            cur.append(line)
+            cur_words += words
+            if cur_words >= cls.CHUNK_TARGET_WORDS:
+                flush()
         if cur:
             # avoid a tiny trailing chunk: merge into the previous one
             if chunks and cur_words < cls.CHUNK_TARGET_WORDS // 3:
