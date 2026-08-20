@@ -20,6 +20,7 @@ const PRIMARY_STAGE_MESSAGES = {
   preparing_inputs: ["Preparing", "Formatting the conversation for the model."],
   generating_audio: ["Generating", "Synthesizing speech — this is the longest step."],
   processing_audio: ["Finalizing", "Converting tensors into a playable waveform."],
+  downloading: ["Downloading", "Transferring the finished audio to your browser."],
   complete: ["Complete", "Press play, or download the WAV."],
   error: ["Error", "Check the log for details."],
   cancelled: ["Stopped", "Generation cancelled. The next run may need a cold start."],
@@ -1477,7 +1478,8 @@ function setStatus(stage, fallbackText) {
   el.statusCard.classList.toggle("error", stage === "error" || stage === "cancelled");
   el.statusTitle.textContent = title;
   el.statusDesc.textContent = fallbackText || defaultDesc || "";
-  el.stopGenBtn.hidden = !running;
+  // No stop while downloading: the render is already done, only the transfer remains.
+  el.stopGenBtn.hidden = !running || stage === "downloading";
 }
 
 let generateAbort = null;
@@ -1597,8 +1599,31 @@ el.generateBtn.addEventListener("click", async () => {
         }
 
         if (evt.stage === "complete" && evt.audio_id) {
+          // Long takes are hundreds of MB — stream the download with progress
+          // so "Complete" never looks like a hang while the WAV transfers.
+          setStatus("downloading");
           const audioRes = await fetch(`/api/audio/${evt.audio_id}`);
-          const blob = await audioRes.blob();
+          if (!audioRes.ok) throw new Error("The finished audio could not be fetched from the server.");
+          const totalBytes = Number(audioRes.headers.get("Content-Length")) || 0;
+          const audioReader = audioRes.body.getReader();
+          const parts = [];
+          let received = 0;
+          let lastShown = -1;
+          while (true) {
+            const part = await audioReader.read();
+            if (part.done) break;
+            parts.push(part.value);
+            received += part.value.length;
+            const mb = Math.floor(received / 1048576);
+            if (mb !== lastShown) {
+              lastShown = mb;
+              setStatus("downloading", totalBytes
+                ? `Downloading your take… ${mb} / ${Math.ceil(totalBytes / 1048576)} MB`
+                : `Downloading your take… ${mb} MB`);
+            }
+          }
+          const blob = new Blob(parts, { type: audioRes.headers.get("Content-Type") || "audio/wav" });
+          setStatus("complete");
           const url = URL.createObjectURL(blob);
           el.resultAudio.src = url;
           el.downloadBtn.href = url;
