@@ -279,7 +279,10 @@
         </p>
         <textarea id="pastedScript" rows="7" placeholder="Speaker 1: Welcome to the show...&#10;Speaker 2: Thanks for having me..."></textarea>
         <div class="dialog-actions">
-          <input id="scriptFileUpload" type="file" accept=".txt,.md" />
+          <div class="file-pick">
+            <label class="btn">Upload .txt<input id="scriptFileUpload" type="file" accept=".txt,.md" hidden /></label>
+            <span class="file-pick-name" id="scriptFileName">No file chosen</span>
+          </div>
           <div class="row" style="display:flex; gap:8px;">
             <button class="btn" type="button" id="cancelImportBtn">Cancel</button>
             <button class="btn btn-ink" type="button" id="loadScriptBtn">Load</button>

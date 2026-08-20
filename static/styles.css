@@ -784,7 +784,16 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
 }
 .dialog-body textarea:focus { outline: none; border-color: #d9a98c; }
 .dialog-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; gap: 10px; }
-.dialog-actions input[type="file"] { font-size: 0.78rem; max-width: 190px; }
+.file-pick { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.file-pick label { cursor: pointer; }
+.file-pick-name {
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .dialog-close {
   background: none;
   border: none;

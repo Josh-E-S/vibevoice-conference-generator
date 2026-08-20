@@ -86,7 +86,7 @@ const el = {};
   "cloneNameInput", "cloneReplaceRow", "cloneReplacePills", "optimizeCheckbox",
   "readScriptToggle", "readScriptCard", "readScriptText", "readScriptMeta", "readScriptShuffle",
   "cancelCloneBtn", "useCloneBtn",
-  "importDialog", "pastedScript", "scriptFileUpload", "cancelImportBtn", "loadScriptBtn",
+  "importDialog", "pastedScript", "scriptFileUpload", "scriptFileName", "cancelImportBtn", "loadScriptBtn",
 ].forEach((id) => { el[id] = document.getElementById(id); });
 
 function autoGrow(textarea) {
@@ -201,6 +201,11 @@ el.closeAboutBtn.addEventListener("click", () => el.aboutDialog.close());
 el.aboutDialog.addEventListener("click", (e) => { if (e.target === el.aboutDialog) el.aboutDialog.close(); });
 
 el.openImportBtn.addEventListener("click", () => el.importDialog.showModal());
+el.scriptFileUpload.addEventListener("change", () => {
+  el.scriptFileName.textContent = el.scriptFileUpload.files[0]
+    ? el.scriptFileUpload.files[0].name
+    : "No file chosen";
+});
 el.cancelImportBtn.addEventListener("click", () => el.importDialog.close());
 el.importDialog.addEventListener("click", (e) => { if (e.target === el.importDialog) el.importDialog.close(); });
 
@@ -1189,6 +1194,7 @@ el.loadScriptBtn.addEventListener("click", async () => {
     el.importDialog.close();
     el.pastedScript.value = "";
     el.scriptFileUpload.value = "";
+    el.scriptFileName.textContent = "No file chosen";
   } catch (error) {
     alert(error.message);
   }
