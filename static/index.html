@@ -20,6 +20,8 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/vendor/wavesurfer.min.js" defer></script>
+    <script src="/static/vendor/wavesurfer.timeline.min.js" defer></script>
     <script src="/static/app.js" defer></script>
   </head>
   <body>
@@ -156,7 +158,7 @@
         <div id="resultBlock" class="result-block">
           <div class="player-top">
             <button id="playBtn" class="play-btn" type="button" aria-label="Play">►</button>
-            <canvas id="resultWaveform" width="480" height="72"></canvas>
+            <div id="resultWaveform" class="wave-box"></div>
             <button id="openPlayerBtn" class="icon-btn" type="button" title="Open player" aria-label="Open player">
               <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 1.5h4v4"/><path d="M12.5 1.5 7.8 6.2"/><path d="M5.5 12.5h-4v-4"/><path d="M1.5 12.5 6.2 7.8"/></svg>
             </button>
@@ -189,7 +191,7 @@
         <div class="stage-play-row">
           <button id="stagePlayBtn" class="play-btn play-btn-lg" type="button" aria-label="Play">►</button>
         </div>
-        <canvas id="stageWaveform" height="80"></canvas>
+        <div id="stageWaveform" class="wave-box stage-wave"></div>
         <div class="player-time stage-time" id="stageTime">0:00 / 0:00</div>
         <div class="stage-caption">
           <span class="sync-dot stage-dot" id="stageDot"></span>

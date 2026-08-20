@@ -60,6 +60,9 @@ const state = {
   resultTurns: [],       // snapshot of turns for the synced transcript
   resultTitle: "",
   wavePeaks: null,
+  takeDuration: 0,
+  dockWS: null,          // wavesurfer instances: dock mini player / stage
+  stageWS: null,
   activeSyncIndex: -1,
 };
 
@@ -1248,58 +1251,109 @@ el.generateScriptBtn.addEventListener("click", async () => {
   }
 });
 
-/* ---------------- Player: waveform + synced transcript ---------------- */
-async function decodeWavePeaks(url, blocks) {
-  const response = await fetch(url);
-  if (!response.ok) return null;
-  const data = await response.arrayBuffer();
+/* ---------------- Player: waveform (wavesurfer.js) + synced transcript ----------------
+   Peaks are computed with a streaming RMS scan over the WAV's raw PCM: a
+   2-hour take (~430MB) never has to pass through the browser's audio decoder,
+   and RMS (unlike per-bucket max) keeps its shape at any length — peak
+   bucketing over multi-minute windows saturates into one flat bar. */
+async function peaksFromWavBlob(blob, buckets) {
+  const head = new DataView(await blob.slice(0, 512).arrayBuffer());
+  if (head.getUint32(0, false) !== 0x52494646) throw new Error("not a RIFF wav");
+  let offset = 12;
+  let dataStart = -1;
+  let dataSize = 0;
+  let fmt = 1;
+  let bits = 16;
+  let channels = 1;
+  while (offset + 8 <= head.byteLength) {
+    const id = head.getUint32(offset, false);
+    const size = head.getUint32(offset + 4, true);
+    if (id === 0x666d7420) {  // 'fmt '
+      fmt = head.getUint16(offset + 8, true);
+      channels = head.getUint16(offset + 10, true);
+      bits = head.getUint16(offset + 22, true);
+    }
+    if (id === 0x64617461) { dataStart = offset + 8; dataSize = size; break; }  // 'data'
+    offset += 8 + size + (size % 2);
+  }
+  if (dataStart < 0 || fmt !== 1 || bits !== 16) throw new Error("unsupported wav layout");
+  dataSize = Math.min(dataSize, blob.size - dataStart);
+  const totalSamples = Math.floor(dataSize / 2);
+  const frames = Math.max(1, totalSamples / channels);
+  const sums = new Float64Array(buckets);
+  const counts = new Float64Array(buckets);
+  const CHUNK = 1 << 23;  // 8MB slices keep memory flat regardless of take length
+  let sampleIndex = 0;
+  for (let pos = dataStart; pos < dataStart + dataSize; pos += CHUNK) {
+    const buf = await blob.slice(pos, Math.min(pos + CHUNK, dataStart + dataSize)).arrayBuffer();
+    const int16 = new Int16Array(buf, 0, Math.floor(buf.byteLength / 2));
+    for (let i = 0; i < int16.length; i += 1) {
+      const frame = Math.floor((sampleIndex + i) / channels);
+      const b = Math.min(buckets - 1, Math.floor((frame / frames) * buckets));
+      const v = int16[i] / 32768;
+      sums[b] += v * v;
+      counts[b] += 1;
+    }
+    sampleIndex += int16.length;
+  }
+  const rms = Array.from(sums, (s, i) => Math.sqrt(s / (counts[i] || 1)));
+  const max = Math.max(...rms, 1e-6);
+  return rms.map((v) => v / max);
+}
+
+// Fallback for non-WAV blobs: full decode (fine at small sizes), RMS-bucketed.
+async function decodeRmsPeaks(blob, buckets) {
   const context = new AudioContext();
   try {
-    const buffer = await context.decodeAudioData(data.slice(0));
+    const buffer = await context.decodeAudioData(await blob.arrayBuffer());
     const samples = buffer.getChannelData(0);
-    const blockSize = Math.max(1, Math.floor(samples.length / blocks));
-    const peaks = [];
-    for (let block = 0; block < blocks; block += 1) {
-      let peak = 0;
-      const start = block * blockSize;
+    const blockSize = Math.max(1, Math.floor(samples.length / buckets));
+    const rms = [];
+    for (let b = 0; b < buckets; b += 1) {
+      let sum = 0;
+      const start = b * blockSize;
       const end = Math.min(samples.length, start + blockSize);
-      for (let i = start; i < end; i += 1) peak = Math.max(peak, Math.abs(samples[i]));
-      peaks.push(peak);
+      for (let i = start; i < end; i += 1) sum += samples[i] * samples[i];
+      rms.push(Math.sqrt(sum / Math.max(1, end - start)));
     }
-    const maxPeak = Math.max(...peaks, 0.001);
-    return peaks.map((p) => p / maxPeak);
+    const max = Math.max(...rms, 1e-6);
+    return rms.map((v) => v / max);
   } finally {
     await context.close();
   }
 }
 
-function renderWave(progress) {
-  drawWaveOn(el.resultWaveform, progress);
-  if (el.playerStage.open) drawWaveOn(el.stageWaveform, progress);
+const WAVE_SKIN = {
+  waveColor: "#e4d8c2",
+  progressColor: "#e2582a",
+  cursorColor: "#c1481f",
+  cursorWidth: 2,
+  barWidth: 3,
+  barGap: 1.5,
+  barRadius: 2,
+};
+
+function makeWave(container, height, withTimeline) {
+  const plugins = [];
+  if (withTimeline && window.WaveSurfer && WaveSurfer.Timeline) {
+    plugins.push(WaveSurfer.Timeline.create({ height: 14 }));
+  }
+  return WaveSurfer.create({
+    container,
+    height,
+    media: el.resultAudio,
+    peaks: [state.wavePeaks || Array.from({ length: 128 }, () => 0.4)],
+    duration: state.takeDuration || el.resultAudio.duration || 0,
+    interact: true,
+    plugins,
+    ...WAVE_SKIN,
+  });
 }
 
-function drawWaveOn(canvas, progress) {
-  const cssWidth = canvas.clientWidth || 240;
-  const cssHeight = canvas.clientHeight || 44;
-  const dpr = window.devicePixelRatio || 1;
-  if (canvas.width !== Math.round(cssWidth * dpr)) {
-    canvas.width = Math.round(cssWidth * dpr);
-    canvas.height = Math.round(cssHeight * dpr);
-  }
-  const draw = canvas.getContext("2d");
-  draw.setTransform(dpr, 0, 0, dpr, 0, 0);
-  draw.clearRect(0, 0, cssWidth, cssHeight);
-  const peaks = state.wavePeaks || Array.from({ length: 48 }, () => 0.3);
-  const blocks = peaks.length;
-  const step = cssWidth / blocks;
-  const barWidth = Math.max(2, step - 2);
-  peaks.forEach((peak, i) => {
-    const barHeight = Math.max(3, peak * cssHeight * 0.9);
-    const x = i * step + 1;
-    const played = (i + 0.5) / blocks <= progress;
-    draw.fillStyle = played ? "#e2582a" : "#e4d8c2";
-    draw.fillRect(x, (cssHeight - barHeight) / 2, barWidth, barHeight);
-  });
+function rebuildDockWave() {
+  if (state.dockWS) state.dockWS.destroy();
+  el.resultWaveform.innerHTML = "";
+  state.dockWS = makeWave(el.resultWaveform, 44, false);
 }
 
 function buildSyncedTranscript(snapshot) {
@@ -1385,7 +1439,6 @@ function updatePlaybackUI() {
   const duration = audio.duration;
   if (!Number.isFinite(duration) || duration <= 0) return;
   const ratio = audio.currentTime / duration;
-  renderWave(ratio);
   const timeLabel = `${formatClock(audio.currentTime)} / ${formatClock(duration)}`;
   el.playerTime.textContent = timeLabel;
   el.stageTime.textContent = timeLabel;
@@ -1426,25 +1479,25 @@ el.resultAudio.addEventListener("ended", () => setPlayIcons("►"));
 el.resultAudio.addEventListener("timeupdate", updatePlaybackUI);
 el.resultAudio.addEventListener("loadedmetadata", updatePlaybackUI);
 
-function seekFromClick(canvas, e) {
-  const audio = el.resultAudio;
-  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
-  const rect = canvas.getBoundingClientRect();
-  const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  audio.currentTime = ratio * audio.duration;
-  updatePlaybackUI();
-}
-el.resultWaveform.addEventListener("click", (e) => seekFromClick(el.resultWaveform, e));
-el.stageWaveform.addEventListener("click", (e) => seekFromClick(el.stageWaveform, e));
-
 /* Now Playing stage */
 function openPlayerStage() {
   el.stageTitle.textContent = (state.resultTitle || "Untitled conversation").toUpperCase();
   const audio = el.resultAudio;
   updateStageCaption(audio.duration ? audio.currentTime / audio.duration : 0);
   el.playerStage.showModal();
-  drawWaveOn(el.stageWaveform, el.resultAudio.duration ? el.resultAudio.currentTime / el.resultAudio.duration : 0);
+  // Built after showModal so the container has real width to render into.
+  if (state.stageWS) state.stageWS.destroy();
+  el.stageWaveform.innerHTML = "";
+  state.stageWS = makeWave(el.stageWaveform, 80, true);
 }
+
+el.playerStage.addEventListener("close", () => {
+  if (state.stageWS) {
+    state.stageWS.destroy();
+    state.stageWS = null;
+    el.stageWaveform.innerHTML = "";
+  }
+});
 
 el.openPlayerBtn.addEventListener("click", openPlayerStage);
 el.stageCloseBtn.addEventListener("click", () => el.playerStage.close());
@@ -1548,14 +1601,19 @@ async function presentTake(blob, durationSeconds, snapshot) {
   buildSyncedTranscript(snapshot);
   el.dockEmpty.hidden = true;
   el.resultBlock.classList.add("visible");
+  state.takeDuration = durationSeconds;
   try {
-    // Very long takes (hours of WAV) can exceed the browser's decode
-    // memory — the placeholder waveform is fine, never fail the take.
-    state.wavePeaks = await decodeWavePeaks(url, 48);
+    // Streaming PCM scan first (any length, flat memory); decoder fallback
+    // for non-WAV; placeholder bars if both fail — never fail the take.
+    state.wavePeaks = await peaksFromWavBlob(blob, 4096);
   } catch {
-    state.wavePeaks = null;
+    try {
+      state.wavePeaks = await decodeRmsPeaks(blob, 512);
+    } catch {
+      state.wavePeaks = null;
+    }
   }
-  renderWave(0);
+  rebuildDockWave();
   openPlayerStage();
 }
 
