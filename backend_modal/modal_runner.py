@@ -65,7 +65,10 @@ cache_volume = modal.Volume.from_name("vibevoice-cache", create_if_missing=True)
 @app.cls(
     gpu="A100-40GB",
     scaledown_window=300,
-    timeout=3600,  # long-form renders (90-min scripts ~25 min wall) need headroom
+    timeout=7200,  # was 3600: a 120-min+ record attempt hit the 1h ceiling at the
+                   # finish line (2026-08-19), losing the whole render. Long-form
+                   # with cloned voices runs slower than the preset-voice record
+                   # pace (bigger reference prefill per chunk), so give 2h.
     volumes={"/cache": cache_volume}
 )
 class VibeVoiceModel:
