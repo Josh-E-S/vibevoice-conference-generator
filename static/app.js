@@ -1504,8 +1504,17 @@ async function downloadTakeBlob(audioId) {
   const parts = [];
   let received = 0;
   let lastShown = -1;
+  // Stall watchdog: a big transfer through the HF proxy can hang silently;
+  // without this, `await read()` would wait forever with no feedback.
+  const STALL_MS = 60000;
   while (true) {
-    const part = await audioReader.read();
+    const part = await Promise.race([
+      audioReader.read(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(
+          "The audio transfer stalled. Your take is safe on the server — use “Recover last take” to retry."
+        )), STALL_MS)),
+    ]);
     if (part.done) break;
     parts.push(part.value);
     received += part.value.length;
@@ -1700,6 +1709,7 @@ el.generateBtn.addEventListener("click", async () => {
       setStatus("error", error.message);
     }
     el.dockEmpty.hidden = false;
+    checkLastTake();  // if a finished take survived the failure, offer it
   } finally {
     generateAbort = null;
     el.generateBtn.disabled = false;
