@@ -504,9 +504,19 @@ def _encode_wav(sample_rate: int, audio: np.ndarray) -> bytes:
 AUDIO_STORE: dict[str, tuple[float, bytes]] = {}
 
 
+LAST_AUDIO: dict = {}  # {"audio_id", "created", "duration"} of the newest finished take
+
+
 def _prune_audio_store() -> None:
     now = time.time()
-    stale = [k for k, (ts, _) in AUDIO_STORE.items() if now - ts > AUDIO_TTL_SECONDS]
+    keep = LAST_AUDIO.get("audio_id")
+    # Never prune the most recent take: a lost page/tab must not orphan an
+    # hour-long render (learned the hard way, 2026-08-20). It is only evicted
+    # when a newer take replaces it.
+    stale = [
+        k for k, (ts, _) in AUDIO_STORE.items()
+        if now - ts > AUDIO_TTL_SECONDS and k != keep
+    ]
     for k in stale:
         AUDIO_STORE.pop(k, None)
 
@@ -770,9 +780,27 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
                     AUDIO_STORE[audio_id] = (time.time(), wav_bytes)
                     event["audio_id"] = audio_id
                     event["audio_duration"] = len(audio_array) / float(sample_rate)
+                    LAST_AUDIO.clear()
+                    LAST_AUDIO.update(
+                        audio_id=audio_id,
+                        created=time.time(),
+                        duration=event["audio_duration"],
+                    )
                 yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/last-take")
+async def api_last_take() -> dict:
+    """The newest finished take, so a lost page can recover its render."""
+    if not LAST_AUDIO or LAST_AUDIO.get("audio_id") not in AUDIO_STORE:
+        raise HTTPException(status_code=404, detail="No recent take.")
+    return {
+        "audio_id": LAST_AUDIO["audio_id"],
+        "age_seconds": round(time.time() - LAST_AUDIO["created"]),
+        "duration": LAST_AUDIO["duration"],
+    }
 
 
 @app.get("/api/audio/{audio_id}")

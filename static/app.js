@@ -1492,6 +1492,92 @@ el.logToggleBtn.addEventListener("click", () => {
   el.logToggleBtn.textContent = visible ? "Hide generation log" : "View generation log";
 });
 
+/* ---------------- Take download & presentation ---------------- */
+// Long takes are hundreds of MB — stream the download with progress so
+// "Complete" never looks like a hang while the WAV transfers.
+async function downloadTakeBlob(audioId) {
+  setStatus("downloading");
+  const audioRes = await fetch(`/api/audio/${audioId}`);
+  if (!audioRes.ok) throw new Error("The finished audio could not be fetched from the server.");
+  const totalBytes = Number(audioRes.headers.get("Content-Length")) || 0;
+  const audioReader = audioRes.body.getReader();
+  const parts = [];
+  let received = 0;
+  let lastShown = -1;
+  while (true) {
+    const part = await audioReader.read();
+    if (part.done) break;
+    parts.push(part.value);
+    received += part.value.length;
+    const mb = Math.floor(received / 1048576);
+    if (mb !== lastShown) {
+      lastShown = mb;
+      setStatus("downloading", totalBytes
+        ? `Downloading your take… ${mb} / ${Math.ceil(totalBytes / 1048576)} MB`
+        : `Downloading your take… ${mb} MB`);
+    }
+  }
+  return new Blob(parts, { type: audioRes.headers.get("Content-Type") || "audio/wav" });
+}
+
+async function presentTake(blob, durationSeconds, snapshot) {
+  setStatus("complete");
+  const url = URL.createObjectURL(blob);
+  el.resultAudio.src = url;
+  el.downloadBtn.href = url;
+  el.stageDownloadBtn.href = url;
+  el.audioDuration.textContent = formatDuration(durationSeconds);
+  el.playerTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
+  el.stageTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
+  setPlayIcons("►");
+  buildSyncedTranscript(snapshot);
+  el.dockEmpty.hidden = true;
+  el.resultBlock.classList.add("visible");
+  try {
+    // Very long takes (hours of WAV) can exceed the browser's decode
+    // memory — the placeholder waveform is fine, never fail the take.
+    state.wavePeaks = await decodeWavePeaks(url, 48);
+  } catch {
+    state.wavePeaks = null;
+  }
+  renderWave(0);
+  openPlayerStage();
+}
+
+/* On load: if the server still holds a finished take this page doesn't know
+   about (lost tab, accidental navigation), offer to recover it. */
+async function checkLastTake() {
+  try {
+    const res = await fetch("/api/last-take", { cache: "no-store" });
+    if (!res.ok) return;
+    const info = await res.json();
+    const age = info.age_seconds < 120
+      ? "moments ago"
+      : `${Math.round(info.age_seconds / 60)} min ago`;
+    el.dockEmpty.textContent =
+      `A finished take (${formatDuration(info.duration)}, generated ${age}) is still on the server.`;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-accent";
+    btn.style.cssText = "display:block; margin:12px auto 0;";
+    btn.textContent = "Recover last take";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        const blob = await downloadTakeBlob(info.audio_id);
+        el.generationTime.textContent = "--";
+        el.resultModel.textContent = "recovered";
+        state.resultTitle = "Recovered take";
+        await presentTake(blob, info.duration, []);
+      } catch (error) {
+        setStatus("error", error.message);
+        btn.disabled = false;
+      }
+    });
+    el.dockEmpty.append(btn);
+  } catch { /* nothing to recover */ }
+}
+
 /* ---------------- Generate ---------------- */
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -1599,54 +1685,11 @@ el.generateBtn.addEventListener("click", async () => {
         }
 
         if (evt.stage === "complete" && evt.audio_id) {
-          // Long takes are hundreds of MB — stream the download with progress
-          // so "Complete" never looks like a hang while the WAV transfers.
-          setStatus("downloading");
-          const audioRes = await fetch(`/api/audio/${evt.audio_id}`);
-          if (!audioRes.ok) throw new Error("The finished audio could not be fetched from the server.");
-          const totalBytes = Number(audioRes.headers.get("Content-Length")) || 0;
-          const audioReader = audioRes.body.getReader();
-          const parts = [];
-          let received = 0;
-          let lastShown = -1;
-          while (true) {
-            const part = await audioReader.read();
-            if (part.done) break;
-            parts.push(part.value);
-            received += part.value.length;
-            const mb = Math.floor(received / 1048576);
-            if (mb !== lastShown) {
-              lastShown = mb;
-              setStatus("downloading", totalBytes
-                ? `Downloading your take… ${mb} / ${Math.ceil(totalBytes / 1048576)} MB`
-                : `Downloading your take… ${mb} MB`);
-            }
-          }
-          const blob = new Blob(parts, { type: audioRes.headers.get("Content-Type") || "audio/wav" });
-          setStatus("complete");
-          const url = URL.createObjectURL(blob);
-          el.resultAudio.src = url;
-          el.downloadBtn.href = url;
-          el.stageDownloadBtn.href = url;
+          const blob = await downloadTakeBlob(evt.audio_id);
           el.generationTime.textContent = formatDuration((performance.now() - started) / 1000);
-          el.audioDuration.textContent = formatDuration(evt.audio_duration);
           el.resultModel.textContent = state.model;
-          el.playerTime.textContent = `0:00 / ${formatClock(evt.audio_duration)}`;
-          el.stageTime.textContent = `0:00 / ${formatClock(evt.audio_duration)}`;
-          setPlayIcons("►");
           state.resultTitle = el.scriptTitle.textContent;
-          buildSyncedTranscript(turnsSnapshot);
-          el.dockEmpty.hidden = true;
-          el.resultBlock.classList.add("visible");
-          try {
-            // Very long takes (hours of WAV) can exceed the browser's decode
-            // memory — the placeholder waveform is fine, never fail the take.
-            state.wavePeaks = await decodeWavePeaks(url, 48);
-          } catch {
-            state.wavePeaks = null;
-          }
-          renderWave(0);
-          openPlayerStage();
+          await presentTake(blob, evt.audio_duration, turnsSnapshot);
         }
       }
     }
@@ -1691,6 +1734,7 @@ async function init() {
   renderTurns();
   renderExamplePills();
   updateStatus();
+  checkLastTake();
   window.setInterval(updateStatus, 8000);
 }
 
