@@ -84,6 +84,7 @@ const el = {};
   "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn",
   "stageScriptToggle", "stageTranscript", "stagePolishToggle", "polishPanel",
   "polishSpeed", "polishSpeedValue", "polishTone", "polishBoost", "polishReset",
+  "polishNote", "polishStatus",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
   "realtimeRow", "realtimeFactor", "warmupRow", "warmupTime",
   "downloadMp3Btn", "stageDownloadMp3Btn",
@@ -1429,7 +1430,20 @@ const TONE_CURVES = {
   bright: { low: -2, high: 4.5 },
 };
 
-const polish = { ctx: null, low: null, high: null, comp: null, gain: null, tone: "neutral" };
+const polish = { ctx: null, low: null, high: null, gain: null, limiter: null, tone: "neutral", audioId: null };
+
+function polishSettings() {
+  return {
+    speed: Number(el.polishSpeed.value),
+    tone: polish.tone,
+    level: el.polishBoost.checked,
+  };
+}
+
+function polishIsDefault() {
+  const s = polishSettings();
+  return Math.abs(s.speed - 1) < 0.001 && s.tone === "neutral" && !s.level;
+}
 
 function ensureAudioGraph() {
   if (polish.ctx) return true;
@@ -1446,13 +1460,21 @@ function ensureAudioGraph() {
     polish.high = polish.ctx.createBiquadFilter();
     polish.high.type = "highshelf";
     polish.high.frequency.value = 3500;
-    polish.comp = polish.ctx.createDynamicsCompressor();
     polish.gain = polish.ctx.createGain();
+    // A brick-wall-ish limiter always sits last: the old graph applied makeup
+    // gain after compression with nothing to catch peaks, which clipped and
+    // was heard as distortion.
+    polish.limiter = polish.ctx.createDynamicsCompressor();
+    polish.limiter.threshold.value = -1.5;
+    polish.limiter.knee.value = 0;
+    polish.limiter.ratio.value = 20;
+    polish.limiter.attack.value = 0.003;
+    polish.limiter.release.value = 0.12;
     source.connect(polish.low);
     polish.low.connect(polish.high);
-    polish.high.connect(polish.comp);
-    polish.comp.connect(polish.gain);
-    polish.gain.connect(polish.ctx.destination);
+    polish.high.connect(polish.gain);
+    polish.gain.connect(polish.limiter);
+    polish.limiter.connect(polish.ctx.destination);
     applyPolish();
     return true;
   } catch (error) {
@@ -1474,16 +1496,50 @@ function applyPolish() {
     btn.classList.toggle("active", btn.dataset.tone === polish.tone);
   });
 
+  updateExportLinks();
+
   if (!polish.ctx) return;
   const curve = TONE_CURVES[polish.tone] || TONE_CURVES.neutral;
   polish.low.gain.value = curve.low;
   polish.high.gain.value = curve.high;
-  const boost = el.polishBoost.checked;
-  // ratio 1 is a straight wire, so the compressor is bypassed when off.
-  polish.comp.threshold.value = boost ? -26 : 0;
-  polish.comp.ratio.value = boost ? 4 : 1;
-  polish.gain.gain.value = boost ? 1.7 : 1;
+  polish.gain.gain.value = el.polishBoost.checked ? 1.6 : 1;
 }
+
+/* Downloads carry the polish settings: default settings stream the stored take
+   untouched, anything else is rendered by the server. */
+function updateExportLinks() {
+  if (!polish.audioId) return;
+  const plain = `/api/audio/${polish.audioId}`;
+  const s = polishSettings();
+  const query = `speed=${s.speed}&tone=${s.tone}&level=${s.level}`;
+  const isDefault = polishIsDefault();
+  const wavUrl = isDefault ? plain : `${plain}/export?${query}&fmt=wav`;
+  const mp3Url = isDefault ? `${plain}.mp3` : `${plain}/export?${query}&fmt=mp3`;
+  el.downloadBtn.href = wavUrl;
+  el.stageDownloadBtn.href = wavUrl;
+  el.downloadMp3Btn.href = mp3Url;
+  el.stageDownloadMp3Btn.href = mp3Url;
+  el.polishNote.textContent = isDefault
+    ? "Settings are live here; downloads give you the original take."
+    : "Downloads are rendered with these settings — that can take a moment.";
+}
+
+// Encoding/rendering happens on the server when the link is clicked, and a
+// long take takes real time, so say so instead of appearing to do nothing.
+function noteExportStarted(kind) {
+  el.polishStatus.hidden = false;
+  el.polishStatus.textContent = `Preparing your ${kind}… the download starts when it's ready (long takes can take a minute or two).`;
+  clearTimeout(noteExportStarted.timer);
+  noteExportStarted.timer = setTimeout(() => { el.polishStatus.hidden = true; }, 20000);
+}
+
+[["downloadBtn", "WAV"], ["stageDownloadBtn", "WAV"],
+ ["downloadMp3Btn", "MP3"], ["stageDownloadMp3Btn", "MP3"]].forEach(([id, kind]) => {
+  el[id].addEventListener("click", () => {
+    // The stored WAV is served instantly; everything else is rendered on demand.
+    if (kind === "MP3" || !polishIsDefault()) noteExportStarted(kind);
+  });
+});
 
 function polishTouched() {
   ensureAudioGraph();
@@ -1782,13 +1838,11 @@ async function presentTake(audioId, durationSeconds, snapshot) {
   setStatus("complete");
   const url = `/api/audio/${audioId}`;
   el.resultAudio.src = url;
-  el.downloadBtn.href = url;
-  el.stageDownloadBtn.href = url;
-  const mp3Url = `/api/audio/${audioId}.mp3`;
+  polish.audioId = audioId;
   el.downloadMp3Btn.hidden = false;
   el.stageDownloadMp3Btn.hidden = false;
-  el.downloadMp3Btn.href = mp3Url;
-  el.stageDownloadMp3Btn.href = mp3Url;
+  el.polishStatus.hidden = true;
+  updateExportLinks();
   el.audioDuration.textContent = formatDuration(durationSeconds);
   el.playerTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
   el.stageTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;

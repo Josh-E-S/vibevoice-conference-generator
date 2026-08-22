@@ -437,6 +437,7 @@ select:focus { outline: none; border-color: #d9a98c; }
   font-family: var(--font-ui);
   font-size: 0.84rem;
   font-weight: 700;
+  text-decoration: none;  /* anchors styled as buttons must not underline */
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: var(--paper);
@@ -973,6 +974,16 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   border-top: 1px solid var(--border);
   font-size: 0.72rem;
   color: var(--ink-ghost);
+}
+.polish-status {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.45;
 }
 .polish-reset {
   background: none;

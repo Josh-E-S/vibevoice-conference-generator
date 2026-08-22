@@ -852,6 +852,149 @@ async def api_last_take() -> dict:
 
 MP3_CACHE: dict[str, bytes] = {}  # audio_id -> encoded mp3, built lazily on first request
 
+# --- Post-processing (the "polish" controls act on the exported file) ---
+TONE_SHELVES = {                    # (low-shelf dB, high-shelf dB)
+    "neutral": (0.0, 0.0),
+    "warm": (4.0, -3.0),
+    "bright": (-2.0, 4.5),
+}
+POLISH_BLOCK_SECONDS = 30           # bounds memory regardless of take length
+
+
+def _shelf_sos(kind: str, f0: float, gain_db: float, fs: float) -> np.ndarray:
+    """RBJ cookbook shelving biquad, as a single second-order section."""
+    A = 10 ** (gain_db / 40.0)
+    w0 = 2 * np.pi * f0 / fs
+    cos_w0, sin_w0 = np.cos(w0), np.sin(w0)
+    alpha = sin_w0 / 2.0 * np.sqrt(2.0)
+    sqrtA2alpha = 2.0 * np.sqrt(A) * alpha
+    if kind == "low":
+        b = [A * ((A + 1) - (A - 1) * cos_w0 + sqrtA2alpha),
+             2 * A * ((A - 1) - (A + 1) * cos_w0),
+             A * ((A + 1) - (A - 1) * cos_w0 - sqrtA2alpha)]
+        a = [(A + 1) + (A - 1) * cos_w0 + sqrtA2alpha,
+             -2 * ((A - 1) + (A + 1) * cos_w0),
+             (A + 1) + (A - 1) * cos_w0 - sqrtA2alpha]
+    else:
+        b = [A * ((A + 1) + (A - 1) * cos_w0 + sqrtA2alpha),
+             -2 * A * ((A - 1) + (A + 1) * cos_w0),
+             A * ((A + 1) + (A - 1) * cos_w0 - sqrtA2alpha)]
+        a = [(A + 1) - (A - 1) * cos_w0 + sqrtA2alpha,
+             2 * ((A - 1) - (A + 1) * cos_w0),
+             (A + 1) - (A - 1) * cos_w0 - sqrtA2alpha]
+    return np.array([[b[0] / a[0], b[1] / a[0], b[2] / a[0], 1.0, a[1] / a[0], a[2] / a[0]]])
+
+
+def _time_stretch(x: np.ndarray, rate: float) -> np.ndarray:
+    """WSOLA time-scaling: rate > 1 shortens (faster), < 1 lengthens (slower).
+
+    Pitch is preserved — the point of the exercise, since plain resampling
+    would turn a slowed voice into a drawl an octave down.
+    """
+    if abs(rate - 1.0) < 1e-3 or len(x) < 4096:
+        return x
+    N, search = 1024, 128
+    Hs = N // 2
+    Ha = max(1, int(round(Hs * rate)))
+    win = np.hanning(N).astype(np.float32)
+    frames = max(1, int((len(x) - N - search) / Ha))
+    out = np.zeros(frames * Hs + N, dtype=np.float32)
+    norm = np.zeros_like(out)
+    prev_tail = x[:N] * win
+    for i in range(frames):
+        want = i * Ha
+        lo = max(0, want - search)
+        hi = min(len(x) - N, want + search)
+        if hi <= lo:
+            seg_start = min(max(0, want), max(0, len(x) - N))
+        else:
+            cand = x[lo:hi + N]
+            # pick the offset whose overlap best matches the previous tail
+            windows = np.lib.stride_tricks.sliding_window_view(cand, N)[: hi - lo + 1]
+            scores = windows[:, :Hs] @ prev_tail[Hs:]
+            seg_start = lo + int(np.argmax(scores))
+        seg = x[seg_start:seg_start + N]
+        if len(seg) < N:
+            break
+        seg = seg * win
+        o = i * Hs
+        out[o:o + N] += seg
+        norm[o:o + N] += win
+        prev_tail = seg
+    np.maximum(norm, 1e-6, out=norm)
+    return out / norm
+
+
+def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool) -> bytes:
+    """Apply the polish settings to a stored take and return a new WAV.
+
+    Processed in blocks so a five-hour render doesn't need gigabytes at once.
+    """
+    from scipy.signal import sosfilt, sosfilt_zi
+
+    sample_rate, samples = wavfile.read(io.BytesIO(wav_bytes))
+    if samples.ndim > 1:
+        samples = samples[:, 0]
+    low_db, high_db = TONE_SHELVES.get(tone, TONE_SHELVES["neutral"])
+    sos = None
+    if low_db or high_db:
+        parts = []
+        if low_db:
+            parts.append(_shelf_sos("low", 250.0, low_db, sample_rate))
+        if high_db:
+            parts.append(_shelf_sos("high", 3500.0, high_db, sample_rate))
+        sos = np.vstack(parts)
+    zi = sosfilt_zi(sos) * 0.0 if sos is not None else None
+
+    block = POLISH_BLOCK_SECONDS * sample_rate
+    overlap = int(0.025 * sample_rate)  # crossfade between stretched blocks
+    fade = np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+    pieces: list[np.ndarray] = []
+    peak = 1e-6
+    sq_sum = 0.0
+    sq_n = 0
+    for start in range(0, len(samples), block):
+        chunk = samples[start:start + block].astype(np.float32) / 32768.0
+        if sos is not None:
+            chunk, zi = sosfilt(sos, chunk, zi=zi)
+            chunk = chunk.astype(np.float32)
+        chunk = _time_stretch(chunk, speed)
+        if pieces and overlap and len(chunk) > overlap and len(pieces[-1]) > overlap:
+            pieces[-1][-overlap:] = pieces[-1][-overlap:] * (1 - fade) + chunk[:overlap] * fade
+            chunk = chunk[overlap:]
+        if len(chunk):
+            peak = max(peak, float(np.abs(chunk).max()))
+            sq_sum += float(np.dot(chunk, chunk))
+            sq_n += len(chunk)
+        pieces.append(chunk)
+
+    if level:
+        # Lift quiet speech toward a target loudness; the limiter below only
+        # touches peaks, so this raises level without squashing the whole take.
+        # Boost-only: a take that is already at a healthy level is left alone
+        # rather than pulled down to a target.
+        rms = np.sqrt(sq_sum / max(1, sq_n))
+        gain = float(min(6.0, max(1.0, 0.18 / max(rms, 1e-6))))
+    else:
+        gain = float(min(1.0, 0.99 / peak))  # only pull down if it would clip
+
+    KNEE = 0.8
+    out = bytearray()
+    for chunk in pieces:
+        y = chunk * gain
+        if level:
+            mag = np.abs(y)
+            over = mag > KNEE
+            if over.any():
+                excess = (mag[over] - KNEE) / (1.0 - KNEE)
+                y[over] = np.sign(y[over]) * (KNEE + (1.0 - KNEE) * np.tanh(excess))
+        np.clip(y, -1.0, 1.0, out=y)
+        out += (y * 32767.0).astype(np.int16).tobytes()
+
+    header = io.BytesIO()
+    wavfile.write(header, sample_rate, np.frombuffer(bytes(out), dtype=np.int16))
+    return header.getvalue()
+
 
 def _encode_mp3(wav_bytes: bytes) -> bytes:
     """Encode our PCM16 WAV to mono MP3 (96 kbps — transparent for 24kHz speech)."""
@@ -887,6 +1030,43 @@ async def api_audio_mp3(audio_id: str) -> Response:
         content=MP3_CACHE[audio_id],
         media_type="audio/mpeg",
         headers={"Content-Disposition": 'attachment; filename="conference.mp3"'},
+    )
+
+
+POLISH_CACHE: dict[tuple, bytes] = {}   # (audio_id, speed, tone, level, fmt) -> bytes
+
+
+@app.get("/api/audio/{audio_id}/export")
+async def api_audio_export(
+    audio_id: str,
+    speed: float = 1.0,
+    tone: str = "neutral",
+    level: bool = False,
+    fmt: str = "wav",
+) -> Response:
+    """Download the take with the polish settings baked in."""
+    entry = AUDIO_STORE.get(audio_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Audio not found or expired.")
+    speed = round(min(1.25, max(0.8, speed)), 2)
+    tone = tone if tone in TONE_SHELVES else "neutral"
+    fmt = "mp3" if fmt == "mp3" else "wav"
+    key = (audio_id, speed, tone, bool(level), fmt)
+    if key not in POLISH_CACHE:
+        _, wav_bytes = entry
+        loop = asyncio.get_event_loop()
+        processed = await loop.run_in_executor(
+            None, _polish_wav, wav_bytes, speed, tone, bool(level)
+        )
+        if fmt == "mp3":
+            processed = await loop.run_in_executor(None, _encode_mp3, processed)
+        POLISH_CACHE.clear()          # one polished export at a time; these are large
+        POLISH_CACHE[key] = processed
+    data = POLISH_CACHE[key]
+    return Response(
+        content=data,
+        media_type="audio/mpeg" if fmt == "mp3" else "audio/wav",
+        headers={"Content-Disposition": f'attachment; filename="chorus-polished.{fmt}"'},
     )
 
 
