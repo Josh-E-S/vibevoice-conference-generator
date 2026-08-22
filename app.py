@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import os
@@ -17,7 +18,7 @@ from typing import Annotated
 import modal
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import InferenceClient
 from pydantic import BaseModel
@@ -559,14 +560,55 @@ def _enforce_rate_limit(bucket: str, request: Request, limit: int, window_second
 # FASTAPI APP
 # ========================================================
 
+class VersionedStaticFiles(StaticFiles):
+    """Let content-hashed URLs (?v=…) be cached forever; everything else revalidates."""
+
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        scope = kwargs.get("scope") or next((a for a in args if isinstance(a, dict)), {})
+        if b"v=" in scope.get("query_string", b""):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 app = FastAPI(title="VibeVoice Conference Generator")
-app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.mount("/static", VersionedStaticFiles(directory=ROOT / "static"), name="static")
 app.mount("/public", StaticFiles(directory=ROOT / "public"), name="public")
 
 
+# Stamp every /static asset the page loads with a hash of its contents, so a
+# deploy can never leave a browser running yesterday's app.js while today's
+# index.html expects it. Computed once per process; the HTML itself is
+# no-cache so the new URLs are always picked up.
+_ASSET_REF_RE = re.compile(r'(?P<attr>(?:href|src)=")(?P<path>/static/[^"?]+)(?P<end>")')
+_INDEX_HTML: str | None = None
+
+
+def _stamped_index_html() -> str:
+    global _INDEX_HTML
+    if _INDEX_HTML is not None:
+        return _INDEX_HTML
+
+    def stamp(match: re.Match) -> str:
+        asset = ROOT / "static" / match.group("path")[len("/static/"):]
+        try:
+            digest = hashlib.sha256(asset.read_bytes()).hexdigest()[:10]
+        except OSError:
+            return match.group(0)  # referenced file missing — leave the URL alone
+        return f'{match.group("attr")}{match.group("path")}?v={digest}{match.group("end")}'
+
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    _INDEX_HTML = _ASSET_REF_RE.sub(stamp, html)
+    return _INDEX_HTML
+
+
 @app.get("/", include_in_schema=False)
-async def index() -> FileResponse:
-    return FileResponse(ROOT / "static" / "index.html")
+async def index() -> Response:
+    return Response(
+        content=_stamped_index_html(),
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/api/status")
