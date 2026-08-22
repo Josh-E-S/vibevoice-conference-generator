@@ -466,6 +466,7 @@ select:focus { outline: none; border-color: #d9a98c; }
 }
 .btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-accent:disabled { background: #d9a98c; border-color: #d9a98c; opacity: 1; }
+.result-block .btn-pill-outline { margin-bottom: 8px; }
 .btn-pill-outline {
   display: block;
   text-align: center;

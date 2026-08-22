@@ -173,6 +173,8 @@
             <div><span>Model</span> <strong id="resultModel">--</strong></div>
           </div>
           <a id="downloadBtn" class="btn btn-pill-outline" download="chorus-audio.wav">Download WAV</a>
+          <a id="downloadMp3Btn" class="btn btn-pill-outline" download="chorus-audio.mp3"
+             title="Much smaller file — the server encodes it on first click, which can take a minute or two for long takes">Download MP3 (smaller)</a>
           <audio id="resultAudio" hidden></audio>
         </div>
 
@@ -200,6 +202,8 @@
         </div>
         <div class="stage-actions">
           <a class="btn btn-ink" id="stageDownloadBtn" download="chorus-audio.wav">Download WAV</a>
+          <a class="btn btn-pill-outline" id="stageDownloadMp3Btn" download="chorus-audio.mp3"
+             title="Much smaller file — encoded on the server on first click">MP3</a>
           <button class="btn btn-pill-outline" id="stageScriptToggle" type="button">View full script</button>
         </div>
         <div class="synced-transcript stage-transcript" id="stageTranscript" hidden></div>

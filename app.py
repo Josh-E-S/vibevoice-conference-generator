@@ -519,6 +519,7 @@ def _prune_audio_store() -> None:
     ]
     for k in stale:
         AUDIO_STORE.pop(k, None)
+        MP3_CACHE.pop(k, None)
 
 
 # --- Abuse guardrails ---
@@ -801,6 +802,46 @@ async def api_last_take() -> dict:
         "age_seconds": round(time.time() - LAST_AUDIO["created"]),
         "duration": LAST_AUDIO["duration"],
     }
+
+
+MP3_CACHE: dict[str, bytes] = {}  # audio_id -> encoded mp3, built lazily on first request
+
+
+def _encode_mp3(wav_bytes: bytes) -> bytes:
+    """Encode our PCM16 WAV to mono MP3 (96 kbps — transparent for 24kHz speech)."""
+    import lameenc
+
+    sample_rate, samples = wavfile.read(io.BytesIO(wav_bytes))
+    if samples.ndim > 1:
+        samples = samples[:, 0]
+    if samples.dtype != np.int16:
+        samples = np.asarray(samples, dtype=np.int16)
+    encoder = lameenc.Encoder()
+    encoder.set_bit_rate(96)
+    encoder.set_in_sample_rate(int(sample_rate))
+    encoder.set_channels(1)
+    encoder.set_quality(2)
+    mp3 = bytes(encoder.encode(samples.tobytes()))
+    mp3 += bytes(encoder.flush())
+    return mp3
+
+
+@app.get("/api/audio/{audio_id}.mp3")
+async def api_audio_mp3(audio_id: str) -> Response:
+    entry = AUDIO_STORE.get(audio_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Audio not found or expired.")
+    if audio_id not in MP3_CACHE:
+        _, wav_bytes = entry
+        # Encoding hours of audio takes minutes of CPU — keep the event loop free.
+        MP3_CACHE[audio_id] = await asyncio.get_event_loop().run_in_executor(
+            None, _encode_mp3, wav_bytes
+        )
+    return Response(
+        content=MP3_CACHE[audio_id],
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": 'attachment; filename="conference.mp3"'},
+    )
 
 
 @app.get("/api/audio/{audio_id}")

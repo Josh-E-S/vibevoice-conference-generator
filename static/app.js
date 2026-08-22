@@ -82,6 +82,7 @@ const el = {};
   "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn",
   "stageScriptToggle", "stageTranscript",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
+  "downloadMp3Btn", "stageDownloadMp3Btn",
   "logToggleBtn", "logBox",
   "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid", "libraryTitle",
   "cloneVoiceBtn", "cloneDialog", "closeCloneBtn", "recordBtn", "cloneFileInput", "recordTimer",
@@ -1588,12 +1589,21 @@ async function downloadTakeBlob(audioId) {
   return new Blob(parts, { type: audioRes.headers.get("Content-Type") || "audio/wav" });
 }
 
-async function presentTake(blob, durationSeconds, snapshot) {
+async function presentTake(blob, durationSeconds, snapshot, audioId) {
   setStatus("complete");
   const url = URL.createObjectURL(blob);
   el.resultAudio.src = url;
   el.downloadBtn.href = url;
   el.stageDownloadBtn.href = url;
+  // MP3 comes from the server (encoded lazily there) — only offer it while
+  // the server still holds this take.
+  const mp3Url = audioId ? `/api/audio/${audioId}.mp3` : null;
+  el.downloadMp3Btn.hidden = !mp3Url;
+  el.stageDownloadMp3Btn.hidden = !mp3Url;
+  if (mp3Url) {
+    el.downloadMp3Btn.href = mp3Url;
+    el.stageDownloadMp3Btn.href = mp3Url;
+  }
   el.audioDuration.textContent = formatDuration(durationSeconds);
   el.playerTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
   el.stageTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
@@ -1641,7 +1651,7 @@ async function checkLastTake() {
         el.generationTime.textContent = "--";
         el.resultModel.textContent = "recovered";
         state.resultTitle = "Recovered take";
-        await presentTake(blob, info.duration, []);
+        await presentTake(blob, info.duration, [], info.audio_id);
       } catch (error) {
         setStatus("error", error.message);
         btn.disabled = false;
@@ -1762,7 +1772,7 @@ el.generateBtn.addEventListener("click", async () => {
           el.generationTime.textContent = formatDuration((performance.now() - started) / 1000);
           el.resultModel.textContent = state.model;
           state.resultTitle = el.scriptTitle.textContent;
-          await presentTake(blob, evt.audio_duration, turnsSnapshot);
+          await presentTake(blob, evt.audio_duration, turnsSnapshot, evt.audio_id);
         }
       }
     }
