@@ -660,6 +660,16 @@ select:focus { outline: none; border-color: #d9a98c; }
   background: var(--accent);
   transition: width 0.4s ease;
 }
+/* Before any wave has finished there is no honest number to show, so sweep. */
+.progress-track.indeterminate .progress-fill {
+  width: 32%;
+  transition: none;
+  animation: indeterminateSweep 1.7s ease-in-out infinite;
+}
+@keyframes indeterminateSweep {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(320%); }
+}
 .progress-meta {
   font-size: 0.74rem;
   font-weight: 600;

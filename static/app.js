@@ -1567,7 +1567,10 @@ el.stopGenBtn.addEventListener("click", () => {
    useless on a 70-minute render. Its status line carries the real signal
    ("Rendering wave 3/21 …"), so drive progress off completed waves and
    keep a client-side clock ticking between events. */
-const progress = { startedAt: 0, wave: 0, totalWaves: 0, ticker: null, label: "" };
+const progress = {
+  startedAt: 0, wave: 0, totalWaves: 0, ticker: null, label: "",
+  waveStartedAt: 0, waveDurations: [],
+};
 
 function formatMinutes(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
@@ -1583,20 +1586,39 @@ function paintProgress() {
   let pctText = "Starting…";
   if (progress.totalWaves) {
     const done = Math.max(0, progress.wave - 1);
-    const frac = done / progress.totalWaves;
-    const width = `${Math.max(2, frac * 100).toFixed(1)}%`;
+    // Waves land in steps minutes apart, so a bare completed-wave count would
+    // sit at 0% through all of wave 1 and then jump. Once a wave has finished
+    // we know roughly how long one takes, so interpolate inside the current
+    // one; until then the bar runs indeterminate rather than faking a number.
+    const avgWave = progress.waveDurations.length
+      ? progress.waveDurations.reduce((a, b) => a + b, 0) / progress.waveDurations.length
+      : 0;
+    const inWave = avgWave
+      ? Math.min(0.98, ((Date.now() - progress.waveStartedAt) / 1000) / avgWave)
+      : 0;
+    const indeterminate = !avgWave;
+    const frac = (done + inWave) / progress.totalWaves;
+
     el.progressTrack.hidden = false;
-    el.progressFill.style.width = width;
     el.genStageTrack.hidden = false;
-    el.genStageFill.style.width = width;
-    pctText = `${Math.round(frac * 100)}%`;
+    el.progressTrack.classList.toggle("indeterminate", indeterminate);
+    el.genStageTrack.classList.toggle("indeterminate", indeterminate);
+    if (!indeterminate) {
+      const width = `${Math.max(1.5, frac * 100).toFixed(1)}%`;
+      el.progressFill.style.width = width;
+      el.genStageFill.style.width = width;
+      pctText = `${Math.round(frac * 100)}%`;
+      document.title = `${pctText} · Chorus`;
+    } else {
+      pctText = "Rendering…";
+    }
+
     parts.push(`Wave ${progress.wave} of ${progress.totalWaves}`);
     if (done >= 1) {
-      const remaining = (elapsed / done) * (progress.totalWaves - done);
+      const remaining = (elapsed / (done + inWave)) * (progress.totalWaves - done - inWave);
       const eta = formatMinutes(remaining);
       if (eta) parts.push(`~${eta} left`);
     }
-    document.title = `${pctText} · Chorus`;
   } else if (progress.label) {
     parts.push(progress.label);
   }
@@ -1633,7 +1655,11 @@ function startProgress() {
   progress.wave = 0;
   progress.totalWaves = 0;
   progress.label = "";
+  progress.waveStartedAt = 0;
+  progress.waveDurations = [];
   el.progressFill.style.width = "0%";
+  el.progressTrack.classList.remove("indeterminate");
+  el.genStageTrack.classList.remove("indeterminate");
   el.progressTrack.hidden = true;
   clearInterval(progress.ticker);
   progress.ticker = setInterval(paintProgress, 1000);
@@ -1653,7 +1679,16 @@ function noteProgressFromStatus(text) {
   if (!text) return;
   const m = text.match(/wave\s+(\d+)\s*\/\s*(\d+)/i);
   if (m) {
-    progress.wave = Number(m[1]);
+    const wave = Number(m[1]);
+    if (wave !== progress.wave) {
+      // A new wave means the previous one just finished — time it, so the
+      // in-wave interpolation and the ETA have something real to work from.
+      if (progress.wave && progress.waveStartedAt) {
+        progress.waveDurations.push((Date.now() - progress.waveStartedAt) / 1000);
+      }
+      progress.waveStartedAt = Date.now();
+      progress.wave = wave;
+    }
     progress.totalWaves = Number(m[2]);
   } else if (/re-?rolling/i.test(text)) {
     progress.label = "Re-rolling flagged chunks";
