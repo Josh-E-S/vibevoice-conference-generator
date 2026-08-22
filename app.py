@@ -890,17 +890,81 @@ async def api_audio_mp3(audio_id: str) -> Response:
     )
 
 
+@app.get("/api/audio/{audio_id}/peaks")
+async def api_audio_peaks(audio_id: str, buckets: int = 2048) -> dict:
+    """RMS envelope for the waveform display.
+
+    Computed here from a strided sample of the PCM so the browser never has to
+    pull hundreds of megabytes just to draw a picture. RMS (not per-bucket max)
+    keeps its shape on multi-hour takes, where every max-bucket saturates.
+    """
+    entry = AUDIO_STORE.get(audio_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Audio not found or expired.")
+    buckets = max(64, min(4096, buckets))
+    _, wav_bytes = entry
+    sample_rate, samples = wavfile.read(io.BytesIO(wav_bytes))
+    if samples.ndim > 1:
+        samples = samples[:, 0]
+    total = len(samples)
+    if total == 0:
+        raise HTTPException(status_code=422, detail="Stored audio is empty.")
+    # Cap the work: ~500 points per bucket is plenty for an envelope.
+    stride = max(1, total // (buckets * 500))
+    sub = samples[::stride].astype(np.float32) / 32768.0
+    usable = (len(sub) // buckets) * buckets
+    if usable < buckets:
+        rms = np.full(buckets, float(np.sqrt(np.mean(np.square(sub)))) if len(sub) else 0.0)
+    else:
+        rms = np.sqrt(np.mean(np.square(sub[:usable].reshape(buckets, -1)), axis=1))
+    peak = float(rms.max()) or 1.0
+    return {
+        "peaks": [round(float(v) / peak, 4) for v in rms],
+        "duration": total / float(sample_rate),
+    }
+
+
+def _byte_range_response(data: bytes, request: Request, media_type: str) -> Response:
+    """Serve bytes with Range support so the player can stream and seek.
+
+    Without this the browser has to pull an entire multi-hundred-megabyte WAV
+    before it can play a second of it, or seek anywhere in it.
+    """
+    total = len(data)
+    headers = {"Accept-Ranges": "bytes"}
+    raw_range = request.headers.get("range")
+    match = re.match(r"bytes=(\d*)-(\d*)\s*$", raw_range or "")
+    if not match or not (match.group(1) or match.group(2)):
+        headers["Content-Length"] = str(total)
+        return Response(content=data, media_type=media_type, headers=headers)
+
+    if match.group(1):
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) else total - 1
+    else:  # suffix form: bytes=-N means the final N bytes
+        start = max(0, total - int(match.group(2)))
+        end = total - 1
+    if start >= total:
+        return Response(
+            status_code=416,
+            headers={"Content-Range": f"bytes */{total}", "Accept-Ranges": "bytes"},
+        )
+    end = min(end, total - 1)
+    chunk = data[start:end + 1]
+    headers.update({
+        "Content-Range": f"bytes {start}-{end}/{total}",
+        "Content-Length": str(len(chunk)),
+    })
+    return Response(content=chunk, status_code=206, media_type=media_type, headers=headers)
+
+
 @app.get("/api/audio/{audio_id}")
-async def api_audio(audio_id: str) -> Response:
+async def api_audio(audio_id: str, request: Request) -> Response:
     entry = AUDIO_STORE.get(audio_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Audio not found or expired.")
     _, wav_bytes = entry
-    return Response(
-        content=wav_bytes,
-        media_type="audio/wav",
-        headers={"Content-Disposition": 'attachment; filename="conference.wav"'},
-    )
+    return _byte_range_response(wav_bytes, request, "audio/wav")
 
 
 @app.get("/health")

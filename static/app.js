@@ -20,7 +20,6 @@ const PRIMARY_STAGE_MESSAGES = {
   preparing_inputs: ["Preparing", "Formatting the conversation for the model."],
   generating_audio: ["Generating", "Synthesizing speech — this is the longest step."],
   processing_audio: ["Finalizing", "Converting tensors into a playable waveform."],
-  downloading: ["Downloading", "Transferring the finished audio to your browser."],
   complete: ["Complete", "Press play, or download the WAV."],
   error: ["Error", "Check the log for details."],
   cancelled: ["Stopped", "Generation cancelled. The next run may need a cold start."],
@@ -1263,79 +1262,6 @@ el.generateScriptBtn.addEventListener("click", async () => {
    2-hour take (~430MB) never has to pass through the browser's audio decoder,
    and RMS (unlike per-bucket max) keeps its shape at any length — peak
    bucketing over multi-minute windows saturates into one flat bar. */
-async function peaksFromWavBlob(blob, buckets) {
-  const head = new DataView(await blob.slice(0, 512).arrayBuffer());
-  if (head.getUint32(0, false) !== 0x52494646) throw new Error("not a RIFF wav");
-  let offset = 12;
-  let dataStart = -1;
-  let dataSize = 0;
-  let fmt = 1;
-  let bits = 16;
-  let channels = 1;
-  while (offset + 8 <= head.byteLength) {
-    const id = head.getUint32(offset, false);
-    const size = head.getUint32(offset + 4, true);
-    if (id === 0x666d7420) {  // 'fmt '
-      fmt = head.getUint16(offset + 8, true);
-      channels = head.getUint16(offset + 10, true);
-      bits = head.getUint16(offset + 22, true);
-    }
-    if (id === 0x64617461) { dataStart = offset + 8; dataSize = size; break; }  // 'data'
-    offset += 8 + size + (size % 2);
-  }
-  if (dataStart < 0 || fmt !== 1 || bits !== 16) throw new Error("unsupported wav layout");
-  dataSize = Math.min(dataSize, blob.size - dataStart);
-  const totalSamples = Math.floor(dataSize / 2);
-  const frames = Math.max(1, totalSamples / channels);
-  const sums = new Float64Array(buckets);
-  const counts = new Float64Array(buckets);
-  // A 5.5-hour take is ~475M samples; visiting each one would lock the UI for
-  // seconds. Sampling ~1k points per bucket is statistically identical for an
-  // RMS envelope, so stride past the rest and stay well under a second.
-  const TARGET_PER_BUCKET = 1000;
-  const stride = Math.max(1, Math.floor(frames / (buckets * TARGET_PER_BUCKET))) * channels;
-  const CHUNK = 1 << 23;  // 8MB slices keep memory flat regardless of take length
-  let sampleIndex = 0;
-  for (let pos = dataStart; pos < dataStart + dataSize; pos += CHUNK) {
-    const buf = await blob.slice(pos, Math.min(pos + CHUNK, dataStart + dataSize)).arrayBuffer();
-    const int16 = new Int16Array(buf, 0, Math.floor(buf.byteLength / 2));
-    // Keep the stride grid aligned across slice boundaries.
-    const first = (stride - (sampleIndex % stride)) % stride;
-    for (let i = first; i < int16.length; i += stride) {
-      const b = Math.min(buckets - 1, Math.floor(((sampleIndex + i) / channels / frames) * buckets));
-      const v = int16[i] / 32768;
-      sums[b] += v * v;
-      counts[b] += 1;
-    }
-    sampleIndex += int16.length;
-  }
-  const rms = Array.from(sums, (s, i) => Math.sqrt(s / (counts[i] || 1)));
-  const max = Math.max(...rms, 1e-6);
-  return rms.map((v) => v / max);
-}
-
-// Fallback for non-WAV blobs: full decode (fine at small sizes), RMS-bucketed.
-async function decodeRmsPeaks(blob, buckets) {
-  const context = new AudioContext();
-  try {
-    const buffer = await context.decodeAudioData(await blob.arrayBuffer());
-    const samples = buffer.getChannelData(0);
-    const blockSize = Math.max(1, Math.floor(samples.length / buckets));
-    const rms = [];
-    for (let b = 0; b < buckets; b += 1) {
-      let sum = 0;
-      const start = b * blockSize;
-      const end = Math.min(samples.length, start + blockSize);
-      for (let i = start; i < end; i += 1) sum += samples[i] * samples[i];
-      rms.push(Math.sqrt(sum / Math.max(1, end - start)));
-    }
-    const max = Math.max(...rms, 1e-6);
-    return rms.map((v) => v / max);
-  } finally {
-    await context.close();
-  }
-}
-
 const WAVE_SKIN = {
   waveColor: "#e4d8c2",
   progressColor: "#e2582a",
@@ -1654,10 +1580,8 @@ function setStatus(stage, fallbackText) {
   el.statusTitle.textContent = title;
   el.statusDesc.textContent = fallbackText || defaultDesc || "";
   el.genStageDesc.textContent = `${title} — ${fallbackText || defaultDesc || ""}`;
-  // No stop while downloading: the render is already done, only the transfer remains.
-  const canStop = running && stage !== "downloading";
-  el.stopGenBtn.hidden = !canStop;
-  el.genStageStopBtn.hidden = !canStop;
+  el.stopGenBtn.hidden = !running;
+  el.genStageStopBtn.hidden = !running;
 }
 
 let generateAbort = null;
@@ -1840,57 +1764,31 @@ el.logToggleBtn.addEventListener("click", () => {
 });
 
 /* ---------------- Take download & presentation ---------------- */
-// Long takes are hundreds of MB — stream the download with progress so
-// "Complete" never looks like a hang while the WAV transfers.
-async function downloadTakeBlob(audioId) {
-  setStatus("downloading");
-  const audioRes = await fetch(`/api/audio/${audioId}`);
-  if (!audioRes.ok) throw new Error("The finished audio could not be fetched from the server.");
-  const totalBytes = Number(audioRes.headers.get("Content-Length")) || 0;
-  const audioReader = audioRes.body.getReader();
-  const parts = [];
-  let received = 0;
-  let lastShown = -1;
-  // Stall watchdog: a big transfer through the HF proxy can hang silently;
-  // without this, `await read()` would wait forever with no feedback.
-  const STALL_MS = 60000;
-  while (true) {
-    const part = await Promise.race([
-      audioReader.read(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(
-          "The audio transfer stalled. Your take is safe on the server — use “Recover last take” to retry."
-        )), STALL_MS)),
-    ]);
-    if (part.done) break;
-    parts.push(part.value);
-    received += part.value.length;
-    const mb = Math.floor(received / 1048576);
-    if (mb !== lastShown) {
-      lastShown = mb;
-      setStatus("downloading", totalBytes
-        ? `Downloading your take… ${mb} / ${Math.ceil(totalBytes / 1048576)} MB`
-        : `Downloading your take… ${mb} MB`);
-    }
+async function fetchPeaks(audioId) {
+  try {
+    const res = await fetch(`/api/audio/${audioId}/peaks?buckets=2048`);
+    if (!res.ok) return null;
+    return (await res.json()).peaks || null;
+  } catch {
+    return null;  // waveform is decoration; never fail a finished take over it
   }
-  return new Blob(parts, { type: audioRes.headers.get("Content-Type") || "audio/wav" });
 }
 
-async function presentTake(blob, durationSeconds, snapshot, audioId) {
+// The take is streamed straight from the server: the player seeks with Range
+// requests and the download buttons are plain links, so the browser's own
+// download manager handles hundreds of megabytes instead of the page buffering
+// the whole file before anything can be heard.
+async function presentTake(audioId, durationSeconds, snapshot) {
   setStatus("complete");
-  const url = URL.createObjectURL(blob);
+  const url = `/api/audio/${audioId}`;
   el.resultAudio.src = url;
   el.downloadBtn.href = url;
   el.stageDownloadBtn.href = url;
-  // MP3 comes from the server (encoded lazily there) — only offer it while
-  // the server still holds this take.
-  const mp3Url = audioId ? `/api/audio/${audioId}.mp3` : null;
-  el.downloadMp3Btn.hidden = !mp3Url;
-  el.stageDownloadMp3Btn.hidden = !mp3Url;
-  if (mp3Url) {
-    el.downloadMp3Btn.href = mp3Url;
-    el.stageDownloadMp3Btn.href = mp3Url;
-  }
+  const mp3Url = `/api/audio/${audioId}.mp3`;
+  el.downloadMp3Btn.hidden = false;
+  el.stageDownloadMp3Btn.hidden = false;
+  el.downloadMp3Btn.href = mp3Url;
+  el.stageDownloadMp3Btn.href = mp3Url;
   el.audioDuration.textContent = formatDuration(durationSeconds);
   el.playerTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
   el.stageTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
@@ -1900,17 +1798,7 @@ async function presentTake(blob, durationSeconds, snapshot, audioId) {
   el.dockEmpty.hidden = true;
   el.resultBlock.classList.add("visible");
   state.takeDuration = durationSeconds;
-  try {
-    // Streaming PCM scan first (any length, flat memory); decoder fallback
-    // for non-WAV; placeholder bars if both fail — never fail the take.
-    state.wavePeaks = await peaksFromWavBlob(blob, 4096);
-  } catch {
-    try {
-      state.wavePeaks = await decodeRmsPeaks(blob, 512);
-    } catch {
-      state.wavePeaks = null;
-    }
-  }
+  state.wavePeaks = await fetchPeaks(audioId);
   rebuildDockWave();
   openPlayerStage();
 }
@@ -1935,11 +1823,10 @@ async function checkLastTake() {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       try {
-        const blob = await downloadTakeBlob(info.audio_id);
         el.generationTime.textContent = "--";
         el.resultModel.textContent = "recovered";
         state.resultTitle = "Recovered take";
-        await presentTake(blob, info.duration, [], info.audio_id);
+        await presentTake(info.audio_id, info.duration, []);
       } catch (error) {
         setStatus("error", error.message);
         btn.disabled = false;
@@ -2089,7 +1976,6 @@ el.generateBtn.addEventListener("click", async () => {
           // render + warm-up + transferring hundreds of megabytes.
           const renderSeconds = generationSeconds();
           const warmupSeconds = progress.warmupSecs;
-          const blob = await downloadTakeBlob(evt.audio_id);
           el.generationTime.textContent = formatDuration(renderSeconds);
           if (renderSeconds > 0 && evt.audio_duration) {
             el.realtimeRow.hidden = false;
@@ -2099,7 +1985,7 @@ el.generateBtn.addEventListener("click", async () => {
           el.warmupTime.textContent = formatDuration(warmupSeconds);
           el.resultModel.textContent = state.model;
           state.resultTitle = el.scriptTitle.textContent;
-          await presentTake(blob, evt.audio_duration, turnsSnapshot, evt.audio_id);
+          await presentTake(evt.audio_id, evt.audio_duration, turnsSnapshot);
         }
       }
     }
