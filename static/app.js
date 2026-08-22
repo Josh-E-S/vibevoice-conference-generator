@@ -76,6 +76,8 @@ const el = {};
   "generateBarMeta", "generateBtn",
   "statusCard", "statusTitle", "statusDesc", "stopGenBtn",
   "progressTrack", "progressFill", "progressMeta",
+  "stageGenPane", "stagePlayPane", "genStageTitle", "genStagePct", "genStageTrack",
+  "genStageFill", "genStageMeta", "genStageDesc", "genStageLog", "genStageStopBtn",
   "dockEmpty", "resultBlock", "resultWaveform", "resultAudio",
   "playBtn", "playerTime", "syncedTranscript", "openPlayerBtn",
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
@@ -1489,10 +1491,13 @@ el.resultAudio.addEventListener("loadedmetadata", updatePlaybackUI);
 
 /* Now Playing stage */
 function openPlayerStage() {
+  showStagePane("player");
   el.stageTitle.textContent = (state.resultTitle || "Untitled conversation").toUpperCase();
   const audio = el.resultAudio;
   updateStageCaption(audio.duration ? audio.currentTime / audio.duration : 0);
-  el.playerStage.showModal();
+  // Already open when a render hands off from the generating pane — calling
+  // showModal() twice throws InvalidStateError.
+  if (!el.playerStage.open) el.playerStage.showModal();
   // Built after showModal so the container has real width to render into.
   if (state.stageWS) state.stageWS.destroy();
   el.stageWaveform.innerHTML = "";
@@ -1545,8 +1550,11 @@ function setStatus(stage, fallbackText) {
   el.statusCard.classList.toggle("error", stage === "error" || stage === "cancelled");
   el.statusTitle.textContent = title;
   el.statusDesc.textContent = fallbackText || defaultDesc || "";
+  el.genStageDesc.textContent = `${title} — ${fallbackText || defaultDesc || ""}`;
   // No stop while downloading: the render is already done, only the transfer remains.
-  el.stopGenBtn.hidden = !running || stage === "downloading";
+  const canStop = running && stage !== "downloading";
+  el.stopGenBtn.hidden = !canStop;
+  el.genStageStopBtn.hidden = !canStop;
 }
 
 let generateAbort = null;
@@ -1572,25 +1580,53 @@ function paintProgress() {
   if (!progress.startedAt) return;
   const elapsed = (Date.now() - progress.startedAt) / 1000;
   const parts = [];
+  let pctText = "Starting…";
   if (progress.totalWaves) {
     const done = Math.max(0, progress.wave - 1);
     const frac = done / progress.totalWaves;
+    const width = `${Math.max(2, frac * 100).toFixed(1)}%`;
     el.progressTrack.hidden = false;
-    el.progressFill.style.width = `${Math.max(2, frac * 100).toFixed(1)}%`;
+    el.progressFill.style.width = width;
+    el.genStageTrack.hidden = false;
+    el.genStageFill.style.width = width;
+    pctText = `${Math.round(frac * 100)}%`;
     parts.push(`Wave ${progress.wave} of ${progress.totalWaves}`);
     if (done >= 1) {
       const remaining = (elapsed / done) * (progress.totalWaves - done);
       const eta = formatMinutes(remaining);
       if (eta) parts.push(`~${eta} left`);
     }
-    document.title = `${Math.round(frac * 100)}% · Chorus`;
+    document.title = `${pctText} · Chorus`;
   } else if (progress.label) {
     parts.push(progress.label);
   }
   parts.push(`${formatMinutes(elapsed) || "0s"} elapsed`);
+  const meta = parts.join(" · ");
   el.progressMeta.hidden = false;
-  el.progressMeta.textContent = parts.join(" · ");
+  el.progressMeta.textContent = meta;
+  el.genStagePct.textContent = pctText;
+  el.genStageMeta.textContent = meta;
 }
+
+/* The stage doubles as generation mission-control, then becomes the player. */
+function showStagePane(which) {
+  el.stageGenPane.hidden = which !== "generating";
+  el.stagePlayPane.hidden = which !== "player";
+}
+
+function openGenerateStage(title) {
+  el.genStageTitle.textContent = (title || "Untitled conversation").toUpperCase();
+  el.genStagePct.textContent = "Starting…";
+  el.genStageTrack.hidden = true;
+  el.genStageFill.style.width = "0%";
+  el.genStageLog.textContent = "";
+  showStagePane("generating");
+  if (!el.playerStage.open) el.playerStage.showModal();
+}
+
+el.genStageStopBtn.addEventListener("click", () => {
+  if (generateAbort) generateAbort.abort();
+});
 
 function startProgress() {
   progress.startedAt = Date.now();
@@ -1740,6 +1776,18 @@ async function checkLastTake() {
 }
 
 /* ---------------- Generate ---------------- */
+// Editing during a render is meaningless — the payload is already submitted —
+// so freeze the workspace controls until it finishes or is stopped.
+function setWorkspaceEnabled(enabled) {
+  document.body.classList.toggle("is-generating", !enabled);
+  document
+    .querySelectorAll(".sidebar button, .sidebar input, .sidebar select, .canvas button, .canvas input, .canvas select, .canvas textarea")
+    .forEach((node) => {
+      if (node === el.generateBtn) return;  // managed by the generate handler
+      node.disabled = !enabled;
+    });
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1782,6 +1830,11 @@ el.generateBtn.addEventListener("click", async () => {
   el.logToggleBtn.textContent = "View generation log";
   const started = performance.now();
   startProgress();
+  // The render is already submitted — edits here can't reach it, so lock the
+  // workspace rather than let controls silently no-op, and put progress
+  // front and centre.
+  setWorkspaceEnabled(false);
+  openGenerateStage(el.scriptTitle.textContent);
   setStatus("connecting", nextParodyLine() || "Provisioning GPU resources...");
 
   let customAudio;
@@ -1846,11 +1899,15 @@ el.generateBtn.addEventListener("click", async () => {
         if (evt.log) {
           const atBottom =
             el.logBox.scrollHeight - el.logBox.scrollTop - el.logBox.clientHeight < 40;
+          const stageAtBottom =
+            el.genStageLog.scrollHeight - el.genStageLog.scrollTop - el.genStageLog.clientHeight < 40;
           el.logBox.textContent = evt.log;
+          el.genStageLog.textContent = evt.log;
           el.logToggleBtn.hidden = false;
           el.logBox.classList.add("visible");  // the log is worth seeing by default
           el.logToggleBtn.textContent = "Hide generation log";
           if (atBottom) el.logBox.scrollTop = el.logBox.scrollHeight;
+          if (stageAtBottom) el.genStageLog.scrollTop = el.genStageLog.scrollHeight;
         }
 
         if (evt.stage === "complete" && evt.audio_id) {
@@ -1872,6 +1929,7 @@ el.generateBtn.addEventListener("click", async () => {
     checkLastTake();  // if a finished take survived the failure, offer it
   } finally {
     stopProgress();
+    setWorkspaceEnabled(true);
     generateAbort = null;
     el.generateBtn.disabled = false;
     el.generateBtn.textContent = "Generate Audio";

@@ -865,6 +865,50 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
 }
 .stage-speaker { font-size: 0.76rem; color: var(--ink-faint); margin-top: 10px; }
 .stage-actions { display: flex; justify-content: center; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+body.is-generating .sidebar,
+body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
+
+/* Generation view inside the stage */
+.gen-pct {
+  font-family: var(--font-serif);
+  font-size: 3.4rem;
+  line-height: 1;
+  text-align: center;
+  color: var(--accent);
+  margin: 8px 0 18px;
+  font-variant-numeric: tabular-nums;
+}
+.gen-track { height: 10px; margin-bottom: 12px; }
+.gen-stage-meta {
+  text-align: center;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.gen-stage-desc {
+  text-align: center;
+  font-size: 0.84rem;
+  color: var(--ink-faint);
+  margin-top: 6px;
+  min-height: 1.2em;
+}
+.gen-stage-log {
+  margin-top: 18px;
+  background: var(--paper-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--ink-dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  padding: 12px;
+  max-height: 260px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+.gen-stage-log:empty { display: none; }
+
 .stage-transcript { margin: 20px 0 0; max-height: 260px; }
 .stage-transcript .sync-text { font-size: 0.88rem; }
 

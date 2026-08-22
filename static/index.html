@@ -191,6 +191,21 @@
         <button id="stageCloseBtn" class="icon-btn stage-close" type="button" title="Close (Esc)" aria-label="Close player">
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 2l10 10M12 2L2 12"/></svg>
         </button>
+        <div id="stageGenPane" hidden>
+          <div class="stage-eyebrow">GENERATING · <span id="genStageTitle"></span></div>
+          <div class="gen-pct" id="genStagePct">Starting…</div>
+          <div class="progress-track gen-track" id="genStageTrack" hidden>
+            <div class="progress-fill" id="genStageFill"></div>
+          </div>
+          <div class="gen-stage-meta" id="genStageMeta"></div>
+          <div class="gen-stage-desc" id="genStageDesc"></div>
+          <div class="gen-stage-log" id="genStageLog"></div>
+          <div class="stage-actions">
+            <button class="btn stop-gen-btn" type="button" id="genStageStopBtn">Stop generation</button>
+          </div>
+        </div>
+
+        <div id="stagePlayPane">
         <div class="stage-eyebrow">NOW PLAYING · <span id="stageTitle"></span></div>
         <div class="stage-play-row">
           <button id="stagePlayBtn" class="play-btn play-btn-lg" type="button" aria-label="Play">►</button>
@@ -209,6 +224,7 @@
           <button class="btn btn-pill-outline" id="stageScriptToggle" type="button">View full script</button>
         </div>
         <div class="synced-transcript stage-transcript" id="stageTranscript" hidden></div>
+        </div>
       </div>
     </dialog>
 
