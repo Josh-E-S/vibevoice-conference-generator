@@ -1283,14 +1283,20 @@ async function peaksFromWavBlob(blob, buckets) {
   const frames = Math.max(1, totalSamples / channels);
   const sums = new Float64Array(buckets);
   const counts = new Float64Array(buckets);
+  // A 5.5-hour take is ~475M samples; visiting each one would lock the UI for
+  // seconds. Sampling ~1k points per bucket is statistically identical for an
+  // RMS envelope, so stride past the rest and stay well under a second.
+  const TARGET_PER_BUCKET = 1000;
+  const stride = Math.max(1, Math.floor(frames / (buckets * TARGET_PER_BUCKET))) * channels;
   const CHUNK = 1 << 23;  // 8MB slices keep memory flat regardless of take length
   let sampleIndex = 0;
   for (let pos = dataStart; pos < dataStart + dataSize; pos += CHUNK) {
     const buf = await blob.slice(pos, Math.min(pos + CHUNK, dataStart + dataSize)).arrayBuffer();
     const int16 = new Int16Array(buf, 0, Math.floor(buf.byteLength / 2));
-    for (let i = 0; i < int16.length; i += 1) {
-      const frame = Math.floor((sampleIndex + i) / channels);
-      const b = Math.min(buckets - 1, Math.floor((frame / frames) * buckets));
+    // Keep the stride grid aligned across slice boundaries.
+    const first = (stride - (sampleIndex % stride)) % stride;
+    for (let i = first; i < int16.length; i += stride) {
+      const b = Math.min(buckets - 1, Math.floor(((sampleIndex + i) / channels / frames) * buckets));
       const v = int16[i] / 32768;
       sums[b] += v * v;
       counts[b] += 1;
