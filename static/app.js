@@ -1061,7 +1061,7 @@ function renderTurns() {
     empty.id = "emptyTurns";
     empty.innerHTML =
       '<div class="empty-title">No scene yet</div>' +
-      "Type a scenario above and click <strong>Write with AI</strong>, pick an example, or start typing your own line below.";
+      "Describe a scenario above and click <strong>Write with AI</strong>, import a script, or start typing your own line below.";
     el.turnsList.append(empty);
     updateMeta();
     return;
@@ -1170,6 +1170,7 @@ function loadScriptResult(result, titleFallback, summary) {
 /* ---------------- Examples ---------------- */
 function renderExamplePills() {
   el.examplePills.innerHTML = "";
+  el.examplePills.hidden = !state.examples.length;  // no empty gap when unset
   state.examples.forEach((example) => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -1703,7 +1704,12 @@ function paintProgress() {
   let pctText = "Starting…";
   if (!progress.genStartedAt) {
     // Still warming up — say so plainly instead of ticking a generation clock.
+    // The bar stays present and sweeping: hiding it would resize the dialog.
     el.progressMeta.hidden = false;
+    el.progressTrack.hidden = false;
+    el.genStageTrack.hidden = false;
+    el.progressTrack.classList.add("indeterminate");
+    el.genStageTrack.classList.add("indeterminate");
     const warm = `GPU warming up · ${formatMinutes(elapsed) || "0s"}`;
     el.progressMeta.textContent = warm;
     el.genStagePct.textContent = "Warming up…";
@@ -1768,7 +1774,8 @@ function showStagePane(which) {
 function openGenerateStage(title) {
   el.genStageTitle.textContent = (title || "Untitled conversation").toUpperCase();
   el.genStagePct.textContent = "Starting…";
-  el.genStageTrack.hidden = true;
+  el.genStageTrack.hidden = false;
+  el.genStageTrack.classList.add("indeterminate");
   el.genStageFill.style.width = "0%";
   el.genStageLog.textContent = "";
   showStagePane("generating");
@@ -1789,9 +1796,9 @@ function startProgress() {
   progress.genStartedAt = 0;
   progress.warmupSecs = 0;
   el.progressFill.style.width = "0%";
-  el.progressTrack.classList.remove("indeterminate");
-  el.genStageTrack.classList.remove("indeterminate");
-  el.progressTrack.hidden = true;
+  el.progressTrack.classList.add("indeterminate");
+  el.genStageTrack.classList.add("indeterminate");
+  el.progressTrack.hidden = false;
   clearInterval(progress.ticker);
   progress.ticker = setInterval(paintProgress, 1000);
   paintProgress();

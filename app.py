@@ -455,7 +455,11 @@ def _build_examples_index() -> list[dict]:
     return index
 
 
-EXAMPLES_INDEX = _build_examples_index()
+# Examples retired 2026-08-22 (Josh) — the bundled scripts predate the current
+# app and no longer fit it. The loader and text_examples/ files are left intact
+# so restoring a curated set is a one-line change.
+SHOW_BUNDLED_EXAMPLES = False
+EXAMPLES_INDEX = _build_examples_index() if SHOW_BUNDLED_EXAMPLES else []
 
 
 # --- Modal Connection ---

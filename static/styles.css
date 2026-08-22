@@ -845,6 +845,11 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
   border-radius: 24px;
   max-height: 90vh;
   overflow-y: auto;
+  /* Anchored near the top rather than centred: the generating view changes
+     height every second, and a centred dialog would shift ALL its content by
+     half of every delta — which reads as the pointer flickering. */
+  margin-top: 5vh;
+  margin-bottom: auto;
 }
 .player-stage::backdrop { background: rgba(42, 32, 22, 0.55); }
 .stage-body { padding: 36px 36px 30px; }
@@ -889,20 +894,23 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   font-variant-numeric: tabular-nums;
 }
 .gen-track { height: 10px; margin-bottom: 12px; }
+/* Fixed heights so per-second text changes can't resize the dialog. */
 .gen-stage-meta {
   text-align: center;
   font-size: 0.9rem;
   font-weight: 700;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
+  min-height: 1.4em;
 }
 .gen-stage-desc {
   text-align: center;
   font-size: 0.84rem;
   color: var(--ink-faint);
   margin-top: 6px;
-  min-height: 1.2em;
+  min-height: 2.6em;
 }
+.gen-stage-log { height: 260px; }
 .gen-stage-log {
   margin-top: 18px;
   background: var(--paper-soft);
