@@ -75,6 +75,7 @@ const el = {};
   "scriptTitle", "scriptDuration", "turnsList", "addTurnBtn",
   "generateBarMeta", "generateBtn",
   "statusCard", "statusTitle", "statusDesc", "stopGenBtn",
+  "progressTrack", "progressFill", "progressMeta",
   "dockEmpty", "resultBlock", "resultWaveform", "resultAudio",
   "playBtn", "playerTime", "syncedTranscript", "openPlayerBtn",
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
@@ -1553,6 +1554,77 @@ el.stopGenBtn.addEventListener("click", () => {
   if (generateAbort) generateAbort.abort();
 });
 
+/* ---- Real generation progress ----------------------------------------
+   The backend's own pct is a time-based hint that pins at 88% after 90s —
+   useless on a 70-minute render. Its status line carries the real signal
+   ("Rendering wave 3/21 …"), so drive progress off completed waves and
+   keep a client-side clock ticking between events. */
+const progress = { startedAt: 0, wave: 0, totalWaves: 0, ticker: null, label: "" };
+
+function formatMinutes(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  if (seconds < 90) return `${Math.round(seconds)}s`;
+  const mins = Math.round(seconds / 60);
+  return mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+function paintProgress() {
+  if (!progress.startedAt) return;
+  const elapsed = (Date.now() - progress.startedAt) / 1000;
+  const parts = [];
+  if (progress.totalWaves) {
+    const done = Math.max(0, progress.wave - 1);
+    const frac = done / progress.totalWaves;
+    el.progressTrack.hidden = false;
+    el.progressFill.style.width = `${Math.max(2, frac * 100).toFixed(1)}%`;
+    parts.push(`Wave ${progress.wave} of ${progress.totalWaves}`);
+    if (done >= 1) {
+      const remaining = (elapsed / done) * (progress.totalWaves - done);
+      const eta = formatMinutes(remaining);
+      if (eta) parts.push(`~${eta} left`);
+    }
+    document.title = `${Math.round(frac * 100)}% · Chorus`;
+  } else if (progress.label) {
+    parts.push(progress.label);
+  }
+  parts.push(`${formatMinutes(elapsed) || "0s"} elapsed`);
+  el.progressMeta.hidden = false;
+  el.progressMeta.textContent = parts.join(" · ");
+}
+
+function startProgress() {
+  progress.startedAt = Date.now();
+  progress.wave = 0;
+  progress.totalWaves = 0;
+  progress.label = "";
+  el.progressFill.style.width = "0%";
+  el.progressTrack.hidden = true;
+  clearInterval(progress.ticker);
+  progress.ticker = setInterval(paintProgress, 1000);
+  paintProgress();
+}
+
+function stopProgress() {
+  clearInterval(progress.ticker);
+  progress.ticker = null;
+  progress.startedAt = 0;
+  el.progressTrack.hidden = true;
+  el.progressMeta.hidden = true;
+  document.title = "Chorus — AI Voice Studio";
+}
+
+function noteProgressFromStatus(text) {
+  if (!text) return;
+  const m = text.match(/wave\s+(\d+)\s*\/\s*(\d+)/i);
+  if (m) {
+    progress.wave = Number(m[1]);
+    progress.totalWaves = Number(m[2]);
+  } else if (/re-?rolling/i.test(text)) {
+    progress.label = "Re-rolling flagged chunks";
+  }
+  paintProgress();
+}
+
 el.logToggleBtn.addEventListener("click", () => {
   const visible = el.logBox.classList.toggle("visible");
   el.logToggleBtn.textContent = visible ? "Hide generation log" : "View generation log";
@@ -1709,6 +1781,7 @@ el.generateBtn.addEventListener("click", async () => {
   el.logToggleBtn.hidden = true;
   el.logToggleBtn.textContent = "View generation log";
   const started = performance.now();
+  startProgress();
   setStatus("connecting", nextParodyLine() || "Provisioning GPU resources...");
 
   let customAudio;
@@ -1766,11 +1839,18 @@ el.generateBtn.addEventListener("click", async () => {
         if (!rawEvent.startsWith("data: ")) continue;
         const evt = JSON.parse(rawEvent.slice(6));
         const isDone = evt.stage === "complete" || evt.stage === "error";
+        // Read the real status for progress before parody flavour replaces it.
+        noteProgressFromStatus(evt.status);
         const displayLine = isDone ? evt.status : nextParodyLine() || evt.status;
         setStatus(evt.stage, displayLine);
         if (evt.log) {
+          const atBottom =
+            el.logBox.scrollHeight - el.logBox.scrollTop - el.logBox.clientHeight < 40;
           el.logBox.textContent = evt.log;
           el.logToggleBtn.hidden = false;
+          el.logBox.classList.add("visible");  // the log is worth seeing by default
+          el.logToggleBtn.textContent = "Hide generation log";
+          if (atBottom) el.logBox.scrollTop = el.logBox.scrollHeight;
         }
 
         if (evt.stage === "complete" && evt.audio_id) {
@@ -1791,6 +1871,7 @@ el.generateBtn.addEventListener("click", async () => {
     el.dockEmpty.hidden = false;
     checkLastTake();  // if a finished take survived the failure, offer it
   } finally {
+    stopProgress();
     generateAbort = null;
     el.generateBtn.disabled = false;
     el.generateBtn.textContent = "Generate Audio";
