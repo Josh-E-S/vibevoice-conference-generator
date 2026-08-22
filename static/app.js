@@ -13,8 +13,8 @@ const SCRIPT_GEN_MESSAGES = [
 ];
 
 const PRIMARY_STAGE_MESSAGES = {
-  connecting: ["Submitted", "Provisioning GPU resources... cold starts can take up to a minute."],
-  queued: ["Queued", "Worker is spinning up. Cold starts may take 30-60 seconds."],
+  connecting: ["Submitted", "GPU resources warming up — a cold start can take up to a minute."],
+  queued: ["Queued", "GPU resources warming up — the worker is spinning up."],
   loading_model: ["Loading model", "Streaming VibeVoice weights to the GPU."],
   loading_voices: ["Loading voices", null],
   preparing_inputs: ["Preparing", "Formatting the conversation for the model."],
@@ -83,8 +83,10 @@ const el = {};
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
   "playerStage", "stageTitle", "stagePlayBtn", "stageWaveform", "stageTime",
   "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn",
-  "stageScriptToggle", "stageTranscript",
+  "stageScriptToggle", "stageTranscript", "stagePolishToggle", "polishPanel",
+  "polishSpeed", "polishSpeedValue", "polishTone", "polishBoost", "polishReset",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
+  "realtimeRow", "realtimeFactor", "warmupRow", "warmupTime",
   "downloadMp3Btn", "stageDownloadMp3Btn",
   "logToggleBtn", "logBox",
   "voiceLibraryDialog", "closeLibraryBtn", "librarySearch", "libraryFilters", "libraryGrid", "libraryTitle",
@@ -1489,6 +1491,106 @@ el.resultAudio.addEventListener("ended", () => setPlayIcons("►"));
 el.resultAudio.addEventListener("timeupdate", updatePlaybackUI);
 el.resultAudio.addEventListener("loadedmetadata", updatePlaybackUI);
 
+/* ---------------- Post-generation polish ----------------
+   Everything here runs live on the playing element — playbackRate for pace
+   (pitch preserved, so no chipmunk) and a small Web Audio graph for tone and
+   levelling. That means it costs nothing and works on a five-hour take, but
+   it shapes playback only; the stored WAV is untouched. */
+const TONE_CURVES = {
+  neutral: { low: 0, high: 0 },
+  warm: { low: 4, high: -3 },
+  bright: { low: -2, high: 4.5 },
+};
+
+const polish = { ctx: null, low: null, high: null, comp: null, gain: null, tone: "neutral" };
+
+function ensureAudioGraph() {
+  if (polish.ctx) return true;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return false;
+  try {
+    polish.ctx = new Ctx();
+    // createMediaElementSource may only be called once per element; from here
+    // on the element's audio reaches the speakers through this graph.
+    const source = polish.ctx.createMediaElementSource(el.resultAudio);
+    polish.low = polish.ctx.createBiquadFilter();
+    polish.low.type = "lowshelf";
+    polish.low.frequency.value = 250;
+    polish.high = polish.ctx.createBiquadFilter();
+    polish.high.type = "highshelf";
+    polish.high.frequency.value = 3500;
+    polish.comp = polish.ctx.createDynamicsCompressor();
+    polish.gain = polish.ctx.createGain();
+    source.connect(polish.low);
+    polish.low.connect(polish.high);
+    polish.high.connect(polish.comp);
+    polish.comp.connect(polish.gain);
+    polish.gain.connect(polish.ctx.destination);
+    applyPolish();
+    return true;
+  } catch (error) {
+    console.warn("Audio polish unavailable:", error);
+    polish.ctx = null;
+    return false;
+  }
+}
+
+function applyPolish() {
+  const speed = Number(el.polishSpeed.value);
+  el.resultAudio.preservesPitch = true;
+  el.resultAudio.mozPreservesPitch = true;
+  el.resultAudio.webkitPreservesPitch = true;
+  el.resultAudio.playbackRate = speed;
+  el.polishSpeedValue.textContent = `${speed.toFixed(2)}×`;
+
+  el.polishTone.querySelectorAll("button").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tone === polish.tone);
+  });
+
+  if (!polish.ctx) return;
+  const curve = TONE_CURVES[polish.tone] || TONE_CURVES.neutral;
+  polish.low.gain.value = curve.low;
+  polish.high.gain.value = curve.high;
+  const boost = el.polishBoost.checked;
+  // ratio 1 is a straight wire, so the compressor is bypassed when off.
+  polish.comp.threshold.value = boost ? -26 : 0;
+  polish.comp.ratio.value = boost ? 4 : 1;
+  polish.gain.gain.value = boost ? 1.7 : 1;
+}
+
+function polishTouched() {
+  ensureAudioGraph();
+  if (polish.ctx && polish.ctx.state === "suspended") polish.ctx.resume();
+  applyPolish();
+}
+
+el.polishSpeed.addEventListener("input", polishTouched);
+el.polishBoost.addEventListener("change", polishTouched);
+el.polishTone.querySelectorAll("button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    polish.tone = btn.dataset.tone;
+    polishTouched();
+  });
+});
+el.polishReset.addEventListener("click", () => {
+  el.polishSpeed.value = "1";
+  el.polishBoost.checked = false;
+  polish.tone = "neutral";
+  polishTouched();
+});
+el.stagePolishToggle.addEventListener("click", () => {
+  el.polishPanel.hidden = !el.polishPanel.hidden;
+  el.stagePolishToggle.textContent = el.polishPanel.hidden ? "Polish" : "Hide polish";
+  if (!el.polishPanel.hidden) {
+    polishTouched();
+    el.polishPanel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+});
+// A suspended context would silence the element now that audio routes through it.
+el.resultAudio.addEventListener("play", () => {
+  if (polish.ctx && polish.ctx.state === "suspended") polish.ctx.resume();
+});
+
 /* Now Playing stage */
 function openPlayerStage() {
   showStagePane("player");
@@ -1570,7 +1672,22 @@ el.stopGenBtn.addEventListener("click", () => {
 const progress = {
   startedAt: 0, wave: 0, totalWaves: 0, ticker: null, label: "",
   waveStartedAt: 0, waveDurations: [],
+  genStartedAt: 0, warmupSecs: 0,
 };
+
+// GPU warm-up is real work but it isn't generation — folding it into "elapsed"
+// makes a render look slower than it was and skews the ETA, so the clock is
+// rebased the moment synthesis actually starts and warm-up is reported apart.
+function markGenerationStarted() {
+  if (progress.genStartedAt || !progress.startedAt) return;
+  progress.genStartedAt = Date.now();
+  progress.warmupSecs = (progress.genStartedAt - progress.startedAt) / 1000;
+}
+
+function generationSeconds() {
+  const base = progress.genStartedAt || progress.startedAt;
+  return base ? (Date.now() - base) / 1000 : 0;
+}
 
 function formatMinutes(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
@@ -1581,9 +1698,18 @@ function formatMinutes(seconds) {
 
 function paintProgress() {
   if (!progress.startedAt) return;
-  const elapsed = (Date.now() - progress.startedAt) / 1000;
+  const elapsed = generationSeconds();
   const parts = [];
   let pctText = "Starting…";
+  if (!progress.genStartedAt) {
+    // Still warming up — say so plainly instead of ticking a generation clock.
+    el.progressMeta.hidden = false;
+    const warm = `GPU warming up · ${formatMinutes(elapsed) || "0s"}`;
+    el.progressMeta.textContent = warm;
+    el.genStagePct.textContent = "Warming up…";
+    el.genStageMeta.textContent = warm;
+    return;
+  }
   if (progress.totalWaves) {
     const done = Math.max(0, progress.wave - 1);
     // Waves land in steps minutes apart, so a bare completed-wave count would
@@ -1622,7 +1748,10 @@ function paintProgress() {
   } else if (progress.label) {
     parts.push(progress.label);
   }
-  parts.push(`${formatMinutes(elapsed) || "0s"} elapsed`);
+  parts.push(`${formatMinutes(elapsed) || "0s"} generating`);
+  if (progress.warmupSecs >= 5) {
+    parts.push(`${formatMinutes(progress.warmupSecs)} warm-up`);
+  }
   const meta = parts.join(" · ");
   el.progressMeta.hidden = false;
   el.progressMeta.textContent = meta;
@@ -1657,6 +1786,8 @@ function startProgress() {
   progress.label = "";
   progress.waveStartedAt = 0;
   progress.waveDurations = [];
+  progress.genStartedAt = 0;
+  progress.warmupSecs = 0;
   el.progressFill.style.width = "0%";
   el.progressTrack.classList.remove("indeterminate");
   el.genStageTrack.classList.remove("indeterminate");
@@ -1757,6 +1888,7 @@ async function presentTake(blob, durationSeconds, snapshot, audioId) {
   el.playerTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
   el.stageTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
   setPlayIcons("►");
+  applyPolish();  // carry the listener's speed/tone onto the new take
   buildSyncedTranscript(snapshot);
   el.dockEmpty.hidden = true;
   el.resultBlock.classList.add("visible");
@@ -1863,7 +1995,6 @@ el.generateBtn.addEventListener("click", async () => {
   el.logBox.classList.remove("visible");
   el.logToggleBtn.hidden = true;
   el.logToggleBtn.textContent = "View generation log";
-  const started = performance.now();
   startProgress();
   // The render is already submitted — edits here can't reach it, so lock the
   // workspace rather than let controls silently no-op, and put progress
@@ -1927,6 +2058,7 @@ el.generateBtn.addEventListener("click", async () => {
         if (!rawEvent.startsWith("data: ")) continue;
         const evt = JSON.parse(rawEvent.slice(6));
         const isDone = evt.stage === "complete" || evt.stage === "error";
+        if (evt.stage === "generating_audio") markGenerationStarted();
         // Read the real status for progress before parody flavour replaces it.
         noteProgressFromStatus(evt.status);
         const displayLine = isDone ? evt.status : nextParodyLine() || evt.status;
@@ -1946,8 +2078,18 @@ el.generateBtn.addEventListener("click", async () => {
         }
 
         if (evt.stage === "complete" && evt.audio_id) {
+          // Measure before the download so the figure is render time, not
+          // render + warm-up + transferring hundreds of megabytes.
+          const renderSeconds = generationSeconds();
+          const warmupSeconds = progress.warmupSecs;
           const blob = await downloadTakeBlob(evt.audio_id);
-          el.generationTime.textContent = formatDuration((performance.now() - started) / 1000);
+          el.generationTime.textContent = formatDuration(renderSeconds);
+          if (renderSeconds > 0 && evt.audio_duration) {
+            el.realtimeRow.hidden = false;
+            el.realtimeFactor.textContent = `${(evt.audio_duration / renderSeconds).toFixed(2)}× realtime`;
+          }
+          el.warmupRow.hidden = warmupSeconds < 5;
+          el.warmupTime.textContent = formatDuration(warmupSeconds);
           el.resultModel.textContent = state.model;
           state.resultTitle = el.scriptTitle.textContent;
           await presentTake(blob, evt.audio_duration, turnsSnapshot, evt.audio_id);

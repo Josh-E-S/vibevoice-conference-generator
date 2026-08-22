@@ -171,6 +171,8 @@
 
           <div class="result-metrics">
             <div><span>Generation time</span> <strong id="generationTime">--</strong></div>
+            <div id="realtimeRow" hidden><span>Speed</span> <strong id="realtimeFactor">--</strong></div>
+            <div id="warmupRow" hidden><span>GPU warm-up</span> <strong id="warmupTime">--</strong></div>
             <div><span>Audio length</span> <strong id="audioDuration">--</strong></div>
             <div><span>Model</span> <strong id="resultModel">--</strong></div>
           </div>
@@ -221,7 +223,31 @@
           <a class="btn btn-ink" id="stageDownloadBtn" download="chorus-audio.wav">Download WAV</a>
           <a class="btn btn-pill-outline" id="stageDownloadMp3Btn" download="chorus-audio.mp3"
              title="Much smaller file — encoded on the server on first click">MP3</a>
+          <button class="btn btn-pill-outline" id="stagePolishToggle" type="button">Polish</button>
           <button class="btn btn-pill-outline" id="stageScriptToggle" type="button">View full script</button>
+        </div>
+
+        <div class="polish-panel" id="polishPanel" hidden>
+          <div class="polish-row">
+            <span class="polish-label">Speed</span>
+            <input type="range" id="polishSpeed" min="0.8" max="1.25" step="0.05" value="1" />
+            <span class="polish-value" id="polishSpeedValue">1.00×</span>
+          </div>
+          <div class="polish-row">
+            <span class="polish-label">Tone</span>
+            <div class="seg polish-seg" id="polishTone">
+              <button type="button" class="single-line" data-tone="neutral"><span>Neutral</span></button>
+              <button type="button" class="single-line" data-tone="warm"><span>Warm</span></button>
+              <button type="button" class="single-line" data-tone="bright"><span>Bright</span></button>
+            </div>
+          </div>
+          <label class="polish-check">
+            <input type="checkbox" id="polishBoost" /> Even out quiet speech
+          </label>
+          <div class="polish-note">
+            <span>Affects playback here — downloads stay the original take.</span>
+            <button type="button" class="polish-reset" id="polishReset">Reset</button>
+          </div>
         </div>
         <div class="synced-transcript stage-transcript" id="stageTranscript" hidden></div>
         </div>
