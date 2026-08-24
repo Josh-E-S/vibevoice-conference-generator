@@ -1533,12 +1533,52 @@ function noteExportStarted(kind) {
   noteExportStarted.timer = setTimeout(() => { el.polishStatus.hidden = true; }, 20000);
 }
 
+const TAKE_GONE_MESSAGE =
+  "This take is no longer on the server — it is held in memory, so a Space restart or " +
+  "redeploy clears it. Generate a new one; download it before deploying next time.";
+
+function showTakeGone() {
+  el.polishStatus.hidden = false;
+  el.polishStatus.textContent = TAKE_GONE_MESSAGE;
+  el.dockEmpty.hidden = false;
+  el.dockEmpty.textContent = TAKE_GONE_MESSAGE;
+  setStatus("error", "The finished audio is no longer available on the server.");
+}
+
+// A dead link would otherwise surface as the browser's opaque "File wasn't
+// available on site". Probe the stored take (one byte) before letting the
+// download proceed, and say plainly when it has been cleared.
 [["downloadBtn", "WAV"], ["stageDownloadBtn", "WAV"],
  ["downloadMp3Btn", "MP3"], ["stageDownloadMp3Btn", "MP3"]].forEach(([id, kind]) => {
-  el[id].addEventListener("click", () => {
-    // The stored WAV is served instantly; everything else is rendered on demand.
+  el[id].addEventListener("click", async (event) => {
+    const anchor = el[id];
+    if (anchor.dataset.verified === "1") {
+      anchor.dataset.verified = "";
+      return;  // second pass: this is the real download
+    }
+    if (!polish.audioId) return;
+    event.preventDefault();
+    let alive = false;
+    try {
+      // Probe the raw take, never the export URL — that would start a render.
+      const probe = await fetch(`/api/audio/${polish.audioId}`, { headers: { Range: "bytes=0-0" } });
+      alive = probe.ok || probe.status === 206;
+    } catch {
+      alive = false;
+    }
+    if (!alive) {
+      showTakeGone();
+      return;
+    }
     if (kind === "MP3" || !polishIsDefault()) noteExportStarted(kind);
+    anchor.dataset.verified = "1";
+    anchor.click();
   });
+});
+
+// Same story if playback itself can't load the take.
+el.resultAudio.addEventListener("error", () => {
+  if (el.resultAudio.getAttribute("src")) showTakeGone();
 });
 
 function polishTouched() {
