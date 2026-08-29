@@ -59,11 +59,6 @@ AUDIO_TTL_SECONDS = 900
 MAX_CUSTOM_AUDIO_BYTES = 15 * 1024 * 1024  # cap per uploaded voice-clone clip
 
 
-def _turns_budget_for_words(target_words: int) -> int:
-    """How many turns a script of this length plausibly needs, given full-paragraph turns."""
-    return max(6, min(MAX_TURNS, round(target_words / 55)))
-
-
 # --- Load example scripts ---
 def load_example_scripts():
     examples_dir = ROOT / "text_examples"
@@ -377,7 +372,6 @@ def generate_script_from_prompt(
     """Returns (turns, num_speakers, title, voice_selections)."""
     target_minutes = target_minutes if target_minutes in DURATION_OPTIONS_MINUTES else 2
     target_words = target_minutes * WORDS_PER_MINUTE
-    turns_budget = _turns_budget_for_words(target_words)
     min_words = int(target_words * MIN_TARGET_FRACTION)
 
     system = SCRIPT_SYSTEM_PROMPT.format(target_words=target_words, target_minutes=target_minutes)
@@ -428,7 +422,7 @@ def generate_script_from_prompt(
         turns.extend(chunk_turns)
         total_words += chunk_words
 
-        if total_words >= min_words or len(turns) >= turns_budget:
+        if total_words >= min_words or len(turns) >= MAX_TURNS:
             break
         if round_i > 0 and chunk_words < MIN_ROUND_YIELD_WORDS:
             break  # the model has run out of things to say; don't spin on empty rounds
@@ -442,7 +436,7 @@ def generate_script_from_prompt(
             ),
         })
 
-    turns = turns[:turns_budget]
+    turns = turns[:MAX_TURNS]
     # Allow some overshoot past the target before trimming — the model runs long sometimes.
     overshoot_ceiling = int(target_words * 1.3) + 100
     total_words = sum(len(t["text"].split()) for t in turns)
