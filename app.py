@@ -52,6 +52,9 @@ MAX_SCRIPT_WORDS = 100000         # Effectively uncapped (2026-08-14, Josh) — 
                                    # real ceiling; the old 20,000 cap was a leftover UI guess that
                                    # blocked genuine long-form renders below the backend's actual limit
 MAX_TURNS = 250                    # Hard ceiling regardless of target length (safety valve)
+MAX_GEN_ROUNDS = 24                # Hard cap on LLM calls per script regardless of target length
+MIN_TARGET_FRACTION = 0.9          # Stop extending once the script reaches 90% of the word target
+MIN_ROUND_YIELD_WORDS = 40         # A continuation shorter than this means the model is done talking
 AUDIO_TTL_SECONDS = 900
 MAX_CUSTOM_AUDIO_BYTES = 15 * 1024 * 1024  # cap per uploaded voice-clone clip
 
@@ -269,6 +272,16 @@ AFTER THE DIALOGUE — Character roster (REQUIRED):
 - For gender-ambiguous roles (robots, narrators, dragons), pick whichever fits the tone. Never use "N" or "?"
 - Example: "Character Genders: Speaker 1: M, Speaker 2: M, Speaker 3: F" """
 
+# Sent when the first response comes back short of the word target — models chronically
+# undershoot large word counts, so the script is built up over multiple calls.
+CONTINUATION_PROMPT = """The script so far is about {so_far} words, but the target is roughly {target_words} words (~{target_minutes} minutes of spoken audio). Continue the SAME conversation from exactly where it left off.
+
+- Do NOT restart, re-title, recap, or wrap up — keep the conversation developing with new angles, follow-up questions, examples, digressions, and pushback
+- Write approximately {chunk_words} more words of dialogue
+- Begin your reply with "Speaker N:" on its own line (whichever speaker would naturally talk next) and keep the exact same "Speaker N:" format and numbering as before
+- Same style rules apply: full-paragraph turns, no stage directions, no commentary
+- Do NOT repeat the "Character Genders:" line"""
+
 
 # Strip bracketed stage directions, parenthetical cues, and asterisk actions.
 # VibeVoice reads these literally, so we defensively remove them even if the LLM sneaks them in.
@@ -365,36 +378,70 @@ def generate_script_from_prompt(
     target_minutes = target_minutes if target_minutes in DURATION_OPTIONS_MINUTES else 2
     target_words = target_minutes * WORDS_PER_MINUTE
     turns_budget = _turns_budget_for_words(target_words)
-    completion_tokens = min(MAX_COMPLETION_TOKENS, int(target_words * 1.6) + 400)
+    min_words = int(target_words * MIN_TARGET_FRACTION)
 
     system = SCRIPT_SYSTEM_PROMPT.format(target_words=target_words, target_minutes=target_minutes)
-    response = llm_client.chat_completion(
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=completion_tokens,
-        temperature=0.7,
-    )
-    raw = response.choices[0].message.content
-
-    # Extract title from first line if present
-    title = ""
-    lines = raw.strip().split("\n")
-    if lines and lines[0].lower().startswith("title:"):
-        title = lines[0].split(":", 1)[1].strip()
-        raw = "\n".join(lines[1:])
-
-    # Extract and strip the "Character Genders:" line before parsing turns
-    raw, genders = _extract_genders(raw)
-
-    turns = parse_script_to_turns(raw)
-    # Scrub stage directions from each turn, drop any turn that becomes empty
-    turns = [
-        {"speaker": t["speaker"], "text": sanitize_dialogue(t["text"])}
-        for t in turns
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompt},
     ]
-    turns = [t for t in turns if t["text"].strip()]
+
+    # Models chronically undershoot large word targets, so build the script over multiple
+    # calls: generate, count actual words, and keep asking for continuations until the
+    # script is close enough to the target (or the model stops producing new material).
+    title = ""
+    genders: dict[int, str] = {}
+    turns: list[dict] = []
+    total_words = 0
+    # Real continuations yield ~350-800 words each; budget enough rounds to reach the
+    # target even at the low end, within the hard cap.
+    rounds_budget = max(3, min(MAX_GEN_ROUNDS, -(-target_words // 400) + 1))
+    for round_i in range(rounds_budget):
+        remaining_words = target_words - total_words
+        completion_tokens = min(MAX_COMPLETION_TOKENS, int(remaining_words * 1.6) + 400)
+        response = llm_client.chat_completion(
+            messages=messages,
+            max_tokens=completion_tokens,
+            temperature=0.7,
+        )
+        raw = response.choices[0].message.content or ""
+        messages.append({"role": "assistant", "content": raw})
+
+        # Extract title from first line if present (first round only)
+        lines = raw.strip().split("\n")
+        if round_i == 0 and lines and lines[0].lower().startswith("title:"):
+            title = lines[0].split(":", 1)[1].strip()
+            raw = "\n".join(lines[1:])
+
+        # Extract and strip the "Character Genders:" line before parsing turns
+        raw, chunk_genders = _extract_genders(raw)
+        for n, g in chunk_genders.items():
+            genders.setdefault(n, g)
+
+        # Scrub stage directions from each turn, drop any turn that becomes empty
+        chunk_turns = [
+            {"speaker": t["speaker"], "text": sanitize_dialogue(t["text"])}
+            for t in parse_script_to_turns(raw)
+        ]
+        chunk_turns = [t for t in chunk_turns if t["text"].strip()]
+        chunk_words = sum(len(t["text"].split()) for t in chunk_turns)
+        turns.extend(chunk_turns)
+        total_words += chunk_words
+
+        if total_words >= min_words or len(turns) >= turns_budget:
+            break
+        if round_i > 0 and chunk_words < MIN_ROUND_YIELD_WORDS:
+            break  # the model has run out of things to say; don't spin on empty rounds
+        messages.append({
+            "role": "user",
+            "content": CONTINUATION_PROMPT.format(
+                so_far=total_words,
+                target_words=target_words,
+                target_minutes=target_minutes,
+                chunk_words=target_words - total_words,
+            ),
+        })
+
     turns = turns[:turns_budget]
     # Allow some overshoot past the target before trimming — the model runs long sometimes.
     overshoot_ceiling = int(target_words * 1.3) + 100
