@@ -894,6 +894,9 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   margin: 8px 0 18px;
   font-variant-numeric: tabular-nums;
 }
+/* Warm-up has no percentage to tick, so the headline itself breathes. */
+.gen-pct.warming { animation: warmBreath 2s ease-in-out infinite; }
+@keyframes warmBreath { 50% { opacity: 0.45; } }
 .gen-track { height: 10px; margin-bottom: 12px; }
 /* Fixed heights so per-second text changes can't resize the dialog. */
 .gen-stage-meta {

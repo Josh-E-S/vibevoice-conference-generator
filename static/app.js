@@ -1694,7 +1694,53 @@ const progress = {
   startedAt: 0, wave: 0, totalWaves: 0, ticker: null, label: "",
   waveStartedAt: 0, waveDurations: [],
   genStartedAt: 0, warmupSecs: 0,
+  chunks: 0, scriptWords: 0,
 };
+
+/* Per-model timing learned from completed runs, so single-wave renders (which
+   never produce a completed-wave timing mid-run) can still show an estimated
+   percentage and ETA instead of an endless sweep. */
+const CALIBRATION_KEY = "chorus-gen-calibration-v1";
+
+function loadCalibration() {
+  try { return JSON.parse(localStorage.getItem(CALIBRATION_KEY)) || {}; } catch { return {}; }
+}
+
+function calibrationFor(model) {
+  return loadCalibration()[model] || {};
+}
+
+function saveCalibration(model, patch) {
+  try {
+    const all = loadCalibration();
+    all[model] = { ...all[model], ...patch };
+    localStorage.setItem(CALIBRATION_KEY, JSON.stringify(all));
+  } catch { /* private mode etc. — estimates just stay at defaults */ }
+}
+
+// Expected seconds to render one wave: audio length of one chunk times how many
+// seconds of compute one second of audio costs (measured on past runs; the
+// default is a rough 7B figure that a single completed run replaces).
+function waveEstimateSecs() {
+  if (!progress.chunks || !progress.scriptWords) return 0;
+  const audioSecs = (progress.scriptWords / 150) * 60;
+  const chunkAudio = audioSecs / progress.chunks;
+  const factor = calibrationFor(state.model).secsPerAudioSec || 1.6;
+  return Math.max(15, chunkAudio * factor);
+}
+
+// The backend log names the batching plan before the first wave starts.
+function noteChunksFromLog(logText) {
+  if (!logText || progress.chunks) return;
+  const m = logText.match(/Parallel mode:\s*(\d+)\s*chunks?,\s*batches of up to\s*(\d+)/i);
+  if (m) {
+    progress.chunks = Number(m[1]);
+    if (!progress.totalWaves) progress.totalWaves = Math.ceil(Number(m[1]) / Number(m[2]));
+  } else if (/Short script: single-pass/i.test(logText)) {
+    progress.chunks = 1;
+    if (!progress.totalWaves) progress.totalWaves = 1;
+  }
+}
 
 // GPU warm-up is real work but it isn't generation — folding it into "elapsed"
 // makes a render look slower than it was and skews the ETA, so the clock is
@@ -1724,18 +1770,34 @@ function paintProgress() {
   let pctText = "Starting…";
   if (!progress.genStartedAt) {
     // Still warming up — say so plainly instead of ticking a generation clock.
-    // The bar stays present and sweeping: hiding it would resize the dialog.
+    // The bar stays present: hiding it would resize the dialog.
     el.progressMeta.hidden = false;
     el.progressTrack.hidden = false;
     el.genStageTrack.hidden = false;
-    el.progressTrack.classList.add("indeterminate");
-    el.genStageTrack.classList.add("indeterminate");
-    const warm = `GPU warming up · ${formatMinutes(elapsed) || "0s"}`;
+    el.genStagePct.classList.add("warming");
+    const expectedWarmup = calibrationFor(state.model).warmupSecs || 0;
+    let warm;
+    if (expectedWarmup && elapsed > 10) {
+      // Ramp toward the last observed cold start — an estimate in motion beats
+      // a bare sweep that looks frozen for three minutes.
+      const width = `${(Math.min(0.95, elapsed / expectedWarmup) * 100).toFixed(1)}%`;
+      el.progressTrack.classList.remove("indeterminate");
+      el.genStageTrack.classList.remove("indeterminate");
+      el.progressFill.style.width = width;
+      el.genStageFill.style.width = width;
+      warm = `GPU cold start · ${formatMinutes(elapsed) || "0s"} of ~${formatMinutes(expectedWarmup)} (last run)`;
+    } else {
+      el.progressTrack.classList.add("indeterminate");
+      el.genStageTrack.classList.add("indeterminate");
+      warm = `GPU warming up · ${formatMinutes(elapsed) || "0s"}` +
+        (elapsed > 20 ? " — a cold start loads the whole model, usually a few minutes" : "");
+    }
     el.progressMeta.textContent = warm;
     el.genStagePct.textContent = "Warming up…";
     el.genStageMeta.textContent = warm;
     return;
   }
+  el.genStagePct.classList.remove("warming");
   if (progress.totalWaves) {
     const done = Math.max(0, progress.wave - 1);
     // Waves land in steps minutes apart, so a bare completed-wave count would
@@ -1745,10 +1807,15 @@ function paintProgress() {
     const avgWave = progress.waveDurations.length
       ? progress.waveDurations.reduce((a, b) => a + b, 0) / progress.waveDurations.length
       : 0;
-    const inWave = avgWave
-      ? Math.min(0.98, ((Date.now() - progress.waveStartedAt) / 1000) / avgWave)
+    const estWave = avgWave || waveEstimateSecs();
+    const sinceWave = progress.waveStartedAt ? (Date.now() - progress.waveStartedAt) / 1000 : 0;
+    // Real timings from completed waves win; before any exist (always true for a
+    // single-wave render) fall back to the calibrated estimate, capped so the
+    // bar never claims to finish before the model does.
+    const inWave = estWave
+      ? Math.min(avgWave ? 0.98 : 0.95, sinceWave / estWave)
       : 0;
-    const indeterminate = !avgWave;
+    const indeterminate = !estWave;
     const frac = (done + inWave) / progress.totalWaves;
 
     el.progressTrack.hidden = false;
@@ -1765,11 +1832,15 @@ function paintProgress() {
       pctText = "Rendering…";
     }
 
-    parts.push(`Wave ${progress.wave} of ${progress.totalWaves}`);
+    parts.push(`Wave ${Math.max(1, progress.wave)} of ${progress.totalWaves}`);
     if (done >= 1) {
       const remaining = (elapsed / (done + inWave)) * (progress.totalWaves - done - inWave);
       const eta = formatMinutes(remaining);
       if (eta) parts.push(`~${eta} left`);
+    } else if (!avgWave && estWave) {
+      const remaining = estWave * progress.totalWaves - sinceWave;
+      const eta = formatMinutes(remaining);
+      if (eta) parts.push(`~${eta} left (est.)`);
     }
   } else if (progress.label) {
     parts.push(progress.label);
@@ -1815,6 +1886,8 @@ function startProgress() {
   progress.waveDurations = [];
   progress.genStartedAt = 0;
   progress.warmupSecs = 0;
+  progress.chunks = 0;
+  progress.scriptWords = state.turns.reduce((n, t) => n + (t.text || "").split(/\s+/).filter(Boolean).length, 0);
   el.progressFill.style.width = "0%";
   el.progressTrack.classList.add("indeterminate");
   el.genStageTrack.classList.add("indeterminate");
@@ -1830,6 +1903,7 @@ function stopProgress() {
   progress.startedAt = 0;
   el.progressTrack.hidden = true;
   el.progressMeta.hidden = true;
+  el.genStagePct.classList.remove("warming");
   document.title = "Chorus — AI Voice Studio";
 }
 
@@ -2052,6 +2126,7 @@ el.generateBtn.addEventListener("click", async () => {
         const displayLine = isDone ? evt.status : nextParodyLine() || evt.status;
         setStatus(evt.stage, displayLine);
         if (evt.log) {
+          noteChunksFromLog(evt.log);
           const atBottom =
             el.logBox.scrollHeight - el.logBox.scrollTop - el.logBox.clientHeight < 40;
           const stageAtBottom =
@@ -2077,6 +2152,15 @@ el.generateBtn.addEventListener("click", async () => {
           }
           el.warmupRow.hidden = warmupSeconds < 5;
           el.warmupTime.textContent = formatDuration(warmupSeconds);
+          // Remember this run's timings so the next render's progress bar can
+          // show a calibrated estimate instead of an indeterminate sweep.
+          if (renderSeconds > 5 && evt.audio_duration && progress.chunks) {
+            const waves = Math.max(1, progress.totalWaves || 1);
+            const chunkAudio = evt.audio_duration / progress.chunks;
+            const factor = renderSeconds / (waves * chunkAudio);
+            if (factor > 0.2 && factor < 8) saveCalibration(state.model, { secsPerAudioSec: factor });
+          }
+          if (warmupSeconds > 30) saveCalibration(state.model, { warmupSecs: warmupSeconds });
           el.resultModel.textContent = state.model;
           state.resultTitle = el.scriptTitle.textContent;
           await presentTake(evt.audio_id, evt.audio_duration, turnsSnapshot);
