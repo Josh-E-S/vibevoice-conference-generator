@@ -212,6 +212,7 @@
         <div class="stage-play-row">
           <button id="stagePlayBtn" class="play-btn play-btn-lg" type="button" aria-label="Play">►</button>
         </div>
+        <div class="stage-orbs" id="stageOrbs" hidden></div>
         <div id="stageWaveform" class="wave-box stage-wave"></div>
         <div class="player-time stage-time" id="stageTime">0:00 / 0:00</div>
         <div class="stage-caption">
@@ -228,6 +229,7 @@
         </div>
 
         <div class="polish-panel" id="polishPanel" hidden>
+          <div class="polish-head">Changes apply to playback the moment you make them — and downloads are rendered with the same settings.</div>
           <div class="polish-row">
             <span class="polish-label">Speed</span>
             <input type="range" id="polishSpeed" min="0.8" max="1.25" step="0.05" value="1" />
@@ -246,7 +248,7 @@
           </label>
           <div class="polish-status" id="polishStatus" hidden></div>
           <div class="polish-note">
-            <span id="polishNote">Preview only until you change something — then downloads are rendered with these settings.</span>
+            <span id="polishNote">No polish applied — you're hearing (and would download) the original take.</span>
             <button type="button" class="polish-reset" id="polishReset">Reset</button>
           </div>
         </div>

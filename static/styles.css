@@ -863,6 +863,60 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
   margin-bottom: 22px;
 }
 .stage-play-row { display: flex; justify-content: center; margin-bottom: 18px; }
+
+/* Speaker orbs — one per voice; the talking one swells with the live signal. */
+.stage-orbs {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 30px;
+  margin: 2px 0 18px;
+}
+.stage-orb-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 76px;
+}
+.stage-orb {
+  --glow: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.55), transparent 58%),
+    var(--orb-color, var(--accent));
+  opacity: 0.4;
+  transform: scale(0.88);
+  transition: opacity 0.3s ease, box-shadow 0.15s ease;
+  animation: orbIdle 4.5s ease-in-out infinite;
+  box-shadow: 0 0 calc(6px + var(--glow) * 26px) calc(var(--glow) * 5px) var(--orb-color, var(--accent));
+  will-change: transform;
+}
+.stage-orb.talking {
+  opacity: 1;
+  animation: none;
+  transition: opacity 0.15s ease, box-shadow 0.1s ease, transform 0.09s ease-out;
+}
+@keyframes orbIdle {
+  50% { transform: scale(0.88) translateY(-4px); }
+}
+.stage-orb-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: center;
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-orb { animation: none; }
+}
 .play-btn-lg { width: 68px; height: 68px; font-size: 1.3rem; }
 #stageWaveform { width: 100%; min-height: 80px; font-size: 0.6rem; color: var(--ink-ghost); }
 .stage-time { margin: 6px 0 20px; text-align: center; }
@@ -938,6 +992,13 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   background: var(--paper-soft);
   border: 1px solid var(--border);
   border-radius: 14px;
+}
+.polish-head {
+  font-size: 0.74rem;
+  color: var(--ink-dim);
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
 }
 .polish-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .polish-label {

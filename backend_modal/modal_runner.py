@@ -238,9 +238,40 @@ class VibeVoiceModel:
         except Exception as e:
             print(f"Cache cleanup error: {e}")
 
+    # Reference-clip loudness target. Presets were mastered at different levels
+    # and user clones come off hot podcast mics; VibeVoice imprints that gap
+    # onto the generated speakers, so every clip is levelled to the same
+    # speech RMS (~-22 dBFS) before conditioning.
+    REF_TARGET_RMS = 0.08
+    REF_PEAK_CEILING = 0.95
+
+    @classmethod
+    def _normalize_reference(cls, wav: np.ndarray, sr: int) -> np.ndarray:
+        if wav.size == 0:
+            return wav
+        wav = wav.astype(np.float32)
+        # Measure RMS over speech only: frame the clip and drop quiet frames so
+        # leading/trailing silence can't inflate the gain.
+        frame = max(1, int(sr * 0.05))
+        n = (len(wav) // frame) * frame
+        if n >= frame:
+            frames = wav[:n].reshape(-1, frame)
+            frame_rms = np.sqrt(np.mean(np.square(frames), axis=1))
+            active = frame_rms[frame_rms > frame_rms.max() * 0.2]
+            rms = float(np.sqrt(np.mean(np.square(active)))) if active.size else 0.0
+        else:
+            rms = float(np.sqrt(np.mean(np.square(wav))))
+        if rms < 1e-6:
+            return wav
+        gain = cls.REF_TARGET_RMS / rms
+        peak = float(np.abs(wav).max()) or 1.0
+        gain = min(gain, cls.REF_PEAK_CEILING / peak)  # never clip a quiet-but-peaky clip
+        return wav * gain
+
     def read_audio(self, audio_source, target_sr: int = 24000) -> np.ndarray:
         """audio_source is a file path (preset) or raw audio bytes (user-uploaded clone)."""
         try:
+            label = "uploaded clone" if isinstance(audio_source, (bytes, bytearray)) else audio_source
             if isinstance(audio_source, (bytes, bytearray)):
                 audio_source = io.BytesIO(audio_source)
             wav, sr = sf.read(audio_source)
@@ -248,9 +279,9 @@ class VibeVoiceModel:
                 wav = np.mean(wav, axis=1)
             if sr != target_sr:
                 wav = librosa.resample(wav, orig_sr=sr, target_sr=target_sr)
-            return wav
+            return self._normalize_reference(wav, target_sr)
         except Exception as e:
-            print(f"Error reading audio {audio_path}: {e}")
+            print(f"Error reading audio {label}: {e}")
             return np.array([])
 
     # ---- chunked-parallel generation (2026-08-14) ----------------------------

@@ -81,7 +81,7 @@ const el = {};
   "playBtn", "playerTime", "syncedTranscript", "openPlayerBtn",
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
   "playerStage", "stageTitle", "stagePlayBtn", "stageWaveform", "stageTime",
-  "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn",
+  "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn", "stageOrbs",
   "stageScriptToggle", "stageTranscript", "stagePolishToggle", "polishPanel",
   "polishSpeed", "polishSpeedValue", "polishTone", "polishBoost", "polishReset",
   "polishNote", "polishStatus",
@@ -1353,6 +1353,65 @@ function buildSyncedTranscript(snapshot) {
   });
 }
 
+/* Word-count apportioning drifts because speech has pauses the text doesn't:
+   captions were landing ahead of the audio. The RMS peaks envelope (already
+   fetched for the waveform) shows exactly where speech pauses, so snap each
+   turn boundary to the nearest silence→speech onset and rescale the turn's
+   sentence timings into the corrected span. */
+function refineTurnTimings() {
+  const peaks = state.wavePeaks;
+  const turns = state.resultTurns;
+  if (!peaks || peaks.length < 64 || !turns || turns.length < 2) return;
+  const n = peaks.length;
+  // Peaks are normalized to max 1. The quietest few percent is the pause floor;
+  // stay just above it, but never so high that quiet speech reads as silence.
+  const sorted = [...peaks].slice().sort((a, b) => a - b);
+  const noiseFloor = sorted[Math.floor(n * 0.03)] || 0;
+  const speechThresh = Math.min(0.2, Math.max(0.08, noiseFloor + 0.06));
+
+  const adjusted = [0];
+  let drift = 0; // estimate error accumulates through the take; carry the correction forward
+  for (let i = 1; i < turns.length; i += 1) {
+    const est = Math.round(turns[i].startRatio * n) + drift;
+    // Search within 35% of this turn's own span: wide enough for real drift,
+    // too narrow to ever snap to a neighboring turn's pause.
+    const radius = Math.max(3, Math.round((est - adjusted[i - 1] * n) * 0.35));
+    let best = -1;
+    let bestDist = Infinity;
+    const lo = Math.max(1, est - radius);
+    const hi = Math.min(n - 1, est + radius);
+    for (let b = lo; b <= hi; b += 1) {
+      // A bucket over the threshold right after one under it = speech onset.
+      if (peaks[b] >= speechThresh && peaks[b - 1] < speechThresh) {
+        const dist = Math.abs(b - est);
+        if (dist < bestDist) { bestDist = dist; best = b; }
+      }
+    }
+    let candidate;
+    if (best >= 0) {
+      candidate = best / n;
+      drift = best - Math.round(turns[i].startRatio * n);
+    } else {
+      candidate = Math.min(1, Math.max(0, est / n));
+    }
+    // Keep boundaries strictly increasing — a bad snap must not swallow a turn.
+    adjusted.push(Math.max(candidate, adjusted[i - 1] + 1 / n));
+  }
+
+  turns.forEach((turn, i) => {
+    const oldStart = turn.startRatio;
+    const oldSpan = turn.endRatio - oldStart || 1e-9;
+    const newStart = adjusted[i];
+    const newEnd = i + 1 < turns.length ? adjusted[i + 1] : 1;
+    turn.startRatio = newStart;
+    turn.endRatio = newEnd;
+    turn.sentences.forEach((s) => {
+      s.startRatio = newStart + ((s.startRatio - oldStart) / oldSpan) * (newEnd - newStart);
+      s.endRatio = newStart + ((s.endRatio - oldStart) / oldSpan) * (newEnd - newStart);
+    });
+  });
+}
+
 let lastCaptionKey = "";
 
 function updateStageCaption(ratio = 0) {
@@ -1430,7 +1489,7 @@ const TONE_CURVES = {
   bright: { low: -2, high: 4.5 },
 };
 
-const polish = { ctx: null, low: null, high: null, gain: null, limiter: null, tone: "neutral", audioId: null };
+const polish = { ctx: null, low: null, high: null, gain: null, limiter: null, analyser: null, tone: "neutral", audioId: null };
 
 function polishSettings() {
   return {
@@ -1475,6 +1534,10 @@ function ensureAudioGraph() {
     polish.high.connect(polish.gain);
     polish.gain.connect(polish.limiter);
     polish.limiter.connect(polish.ctx.destination);
+    // Tap for the speaker orbs — reads the signal, outputs nowhere.
+    polish.analyser = polish.ctx.createAnalyser();
+    polish.analyser.fftSize = 512;
+    polish.limiter.connect(polish.analyser);
     applyPolish();
     return true;
   } catch (error) {
@@ -1520,8 +1583,17 @@ function updateExportLinks() {
   el.downloadMp3Btn.href = mp3Url;
   el.stageDownloadMp3Btn.href = mp3Url;
   el.polishNote.textContent = isDefault
-    ? "Settings are live here; downloads give you the original take."
-    : "Downloads are rendered with these settings — that can take a moment.";
+    ? "No polish applied — you're hearing (and would download) the original take."
+    : "Polish is live in your playback right now · downloads are rendered with the same settings (that can take a moment).";
+  updatePolishToggleLabel();
+}
+
+// The button says whether polish is actually shaping the audio, so it's clear
+// the settings are live and not download-only.
+function updatePolishToggleLabel() {
+  el.stagePolishToggle.textContent = !el.polishPanel.hidden
+    ? "Hide polish"
+    : polishIsDefault() ? "Polish" : "Polish · on";
 }
 
 // Encoding/rendering happens on the server when the link is clicked, and a
@@ -1603,7 +1675,7 @@ el.polishReset.addEventListener("click", () => {
 });
 el.stagePolishToggle.addEventListener("click", () => {
   el.polishPanel.hidden = !el.polishPanel.hidden;
-  el.stagePolishToggle.textContent = el.polishPanel.hidden ? "Polish" : "Hide polish";
+  updatePolishToggleLabel();
   if (!el.polishPanel.hidden) {
     polishTouched();
     el.polishPanel.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -1613,6 +1685,89 @@ el.stagePolishToggle.addEventListener("click", () => {
 el.resultAudio.addEventListener("play", () => {
   if (polish.ctx && polish.ctx.state === "suspended") polish.ctx.resume();
 });
+
+/* ---------------- Speaker orbs ----------------
+   One glowing orb per speaker on the stage; the one who's talking swells with
+   the live signal level (Web Audio analyser), the others drift idle. */
+const orbs = { bySpeaker: new Map(), raf: 0, level: new Uint8Array(0) };
+
+function buildStageOrbs() {
+  orbs.bySpeaker.clear();
+  el.stageOrbs.innerHTML = "";
+  const speakers = [...new Set(state.resultTurns.map((t) => t.speaker))].sort((a, b) => a - b);
+  el.stageOrbs.hidden = speakers.length === 0;
+  speakers.forEach((s, i) => {
+    const wrap = document.createElement("div");
+    wrap.className = "stage-orb-wrap";
+    const orb = document.createElement("div");
+    orb.className = "stage-orb";
+    orb.style.setProperty("--orb-color", slotColor(s - 1));
+    orb.style.animationDelay = `${i * 0.7}s`;
+    const label = document.createElement("div");
+    label.className = "stage-orb-label";
+    label.textContent = slotVoiceLabel(s - 1);
+    wrap.append(orb, label);
+    el.stageOrbs.append(wrap);
+    orbs.bySpeaker.set(s, orb);
+  });
+}
+
+function currentAudioLevel() {
+  if (!polish.analyser) return 0.5; // no Web Audio — pulse at a fixed level
+  if (orbs.level.length !== polish.analyser.fftSize) {
+    orbs.level = new Uint8Array(polish.analyser.fftSize);
+  }
+  polish.analyser.getByteTimeDomainData(orbs.level);
+  let sum = 0;
+  for (let i = 0; i < orbs.level.length; i += 1) {
+    const d = (orbs.level[i] - 128) / 128;
+    sum += d * d;
+  }
+  // RMS of speech sits low; stretch it so the orb visibly moves.
+  return Math.min(1, Math.sqrt(sum / orbs.level.length) * 4);
+}
+
+function orbFrame() {
+  const audio = el.resultAudio;
+  const activeTurn = state.resultTurns[state.activeSyncIndex];
+  const activeSpeaker = activeTurn ? activeTurn.speaker : -1;
+  const level = audio.paused ? 0 : currentAudioLevel();
+  orbs.bySpeaker.forEach((orb, speaker) => {
+    const talking = !audio.paused && speaker === activeSpeaker;
+    orb.classList.toggle("talking", talking);
+    if (talking) {
+      orb.style.transform = `scale(${(1.06 + level * 0.55).toFixed(3)})`;
+      orb.style.setProperty("--glow", (0.35 + level * 0.65).toFixed(3));
+    } else {
+      orb.style.transform = "";
+      orb.style.removeProperty("--glow");
+    }
+  });
+  orbs.raf = audio.paused ? 0 : requestAnimationFrame(orbFrame);
+}
+
+function startOrbLoop() {
+  if (!orbs.raf && orbs.bySpeaker.size) orbs.raf = requestAnimationFrame(orbFrame);
+}
+
+function stopOrbLoop() {
+  cancelAnimationFrame(orbs.raf);
+  orbs.raf = 0;
+  orbs.bySpeaker.forEach((orb) => {
+    orb.classList.remove("talking");
+    orb.style.transform = "";
+  });
+}
+
+el.resultAudio.addEventListener("play", () => {
+  // Building the graph needs a user gesture anyway, and play is one — so this
+  // is the moment the analyser can come to life.
+  ensureAudioGraph();
+  if (polish.ctx && polish.ctx.state === "suspended") polish.ctx.resume();
+  startOrbLoop();
+});
+el.resultAudio.addEventListener("pause", stopOrbLoop);
+el.resultAudio.addEventListener("ended", stopOrbLoop);
 
 /* Now Playing stage */
 function openPlayerStage() {
@@ -1966,7 +2121,9 @@ async function presentTake(audioId, durationSeconds, snapshot) {
   el.dockEmpty.hidden = true;
   el.resultBlock.classList.add("visible");
   state.takeDuration = durationSeconds;
+  buildStageOrbs();
   state.wavePeaks = await fetchPeaks(audioId);
+  refineTurnTimings();
   rebuildDockWave();
   openPlayerStage();
 }
