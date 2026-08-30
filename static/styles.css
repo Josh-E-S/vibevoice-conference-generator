@@ -864,35 +864,42 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
 }
 .stage-play-row { display: flex; justify-content: center; margin-bottom: 18px; }
 
-/* Speaker orbs — one per voice; the talking one swells with the live signal. */
+/* Speaker orbs — one per voice; the talking one glows with the live signal.
+   Scale stays modest and the glow is a soft translucent halo, so neither can
+   cover the name label beneath. */
 .stage-orbs {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  gap: 30px;
-  margin: 2px 0 18px;
+  gap: 34px;
+  margin: 4px 0 20px;
 }
 .stage-orb-wrap {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  width: 76px;
+  gap: 13px;
+  width: 84px;
 }
 .stage-orb {
   --glow: 0;
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.55), transparent 58%),
+    radial-gradient(circle at 33% 28%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.08) 55%, transparent 70%),
+    radial-gradient(circle at 68% 78%, rgba(0, 0, 0, 0.18), transparent 55%),
     var(--orb-color, var(--accent));
-  opacity: 0.4;
-  transform: scale(0.88);
+  opacity: 0.42;
+  transform: scale(0.9);
   transition: opacity 0.3s ease, box-shadow 0.15s ease;
   animation: orbIdle 4.5s ease-in-out infinite;
-  box-shadow: 0 0 calc(6px + var(--glow) * 26px) calc(var(--glow) * 5px) var(--orb-color, var(--accent));
+  box-shadow:
+    0 0 calc(8px + var(--glow) * 30px) calc(var(--glow) * 4px)
+      color-mix(in srgb, var(--orb-color, var(--accent)) 45%, transparent),
+    inset 0 -2px 6px rgba(0, 0, 0, 0.12);
   will-change: transform;
+  z-index: 0;
 }
 .stage-orb.talking {
   opacity: 1;
@@ -900,7 +907,7 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
   transition: opacity 0.15s ease, box-shadow 0.1s ease, transform 0.09s ease-out;
 }
 @keyframes orbIdle {
-  50% { transform: scale(0.88) translateY(-4px); }
+  50% { transform: scale(0.9) translateY(-4px); }
 }
 .stage-orb-label {
   font-size: 0.62rem;
@@ -909,10 +916,12 @@ dialog::backdrop { background: rgba(42, 32, 22, 0.45); }
   text-transform: uppercase;
   color: var(--ink-faint);
   text-align: center;
-  max-width: 76px;
+  max-width: 84px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  position: relative;
+  z-index: 1; /* names always read above a neighboring orb's halo */
 }
 @media (prefers-reduced-motion: reduce) {
   .stage-orb { animation: none; }
@@ -985,62 +994,32 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
 }
 .gen-stage-log:empty { display: none; }
 
-/* Post-generation polish */
-.polish-panel {
-  margin-top: 18px;
-  padding: 16px 18px;
-  background: var(--paper-soft);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+/* Sound: one choice — Original, or normalized with a tone character. */
+.sound-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 22px;
 }
-.polish-head {
-  font-size: 0.74rem;
-  color: var(--ink-dim);
-  margin-bottom: 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
-}
-.polish-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.polish-label {
-  font-size: 0.7rem;
+.sound-label {
+  font-size: 0.68rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-faint);
-  width: 58px;
-  flex-shrink: 0;
 }
-.polish-row input[type="range"] { flex: 1; margin: 0; }
-.polish-value {
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--accent);
-  width: 48px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-.polish-seg { flex: 1; margin-bottom: 0; }
-.polish-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.8rem;
-  color: var(--ink-dim);
-  cursor: pointer;
-}
-.polish-note {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
+.sound-seg { margin-bottom: 0; }
+.sound-hint {
+  margin-top: 9px;
+  text-align: center;
   font-size: 0.72rem;
   color: var(--ink-ghost);
+  min-height: 1.1em; /* text changes per chip; don't let the dialog resize */
 }
 .polish-status {
-  margin-top: 10px;
+  margin: 10px auto 0;
+  max-width: 480px;
   padding: 9px 12px;
   border-radius: 10px;
   background: var(--accent-soft);
@@ -1048,16 +1027,7 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   font-size: 0.76rem;
   font-weight: 600;
   line-height: 1.45;
-}
-.polish-reset {
-  background: none;
-  border: none;
-  padding: 0;
-  font-size: 0.74rem;
-  font-weight: 700;
-  color: var(--accent);
-  cursor: pointer;
-  flex-shrink: 0;
+  text-align: center;
 }
 
 .stage-transcript { margin: 20px 0 0; max-height: 260px; }

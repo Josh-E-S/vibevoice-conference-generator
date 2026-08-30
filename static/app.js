@@ -82,9 +82,7 @@ const el = {};
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
   "playerStage", "stageTitle", "stagePlayBtn", "stageWaveform", "stageTime",
   "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn", "stageOrbs",
-  "stageScriptToggle", "stageTranscript", "stagePolishToggle", "polishPanel",
-  "polishSpeed", "polishSpeedValue", "polishTone", "polishBoost", "polishNorm", "polishReset",
-  "polishNote", "polishStatus",
+  "stageScriptToggle", "stageTranscript", "soundSeg", "soundHint", "polishStatus",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
   "realtimeRow", "realtimeFactor", "warmupRow", "warmupTime",
   "downloadMp3Btn", "stageDownloadMp3Btn",
@@ -1353,6 +1351,41 @@ function buildSyncedTranscript(snapshot) {
   });
 }
 
+/* The backend renders the take in chunks and reports exactly where each chunk
+   starts and how many turns it covers. Those are hard anchors: retime the
+   word-proportional estimate piecewise between them, so timing error can never
+   accumulate past a chunk (~80s). Falls back silently when the take has no
+   timing map (cache hits, recovered takes). */
+function applyChunkAnchors(anchors, durationSeconds) {
+  state.anchoredTurns = new Set();
+  const turns = state.resultTurns;
+  if (!anchors || !turns.length || !durationSeconds) return;
+  const starts = anchors.starts || [];
+  const counts = anchors.counts || [];
+  if (starts.length !== counts.length || starts.length < 2) return;
+  if (counts.reduce((a, b) => a + b, 0) !== turns.length) return; // map doesn't fit this script
+  let first = 0;
+  for (let k = 0; k < counts.length; k += 1) {
+    const chunkTurns = turns.slice(first, first + counts[k]);
+    const newStart = starts[k] / durationSeconds;
+    const newEnd = (k + 1 < starts.length ? starts[k + 1] : durationSeconds) / durationSeconds;
+    const oldStart = chunkTurns[0].startRatio;
+    const oldSpan = chunkTurns[chunkTurns.length - 1].endRatio - oldStart || 1e-9;
+    const scale = (newEnd - newStart) / oldSpan;
+    chunkTurns.forEach((turn) => {
+      const remap = (r) => newStart + (r - oldStart) * scale;
+      turn.sentences.forEach((s) => {
+        s.startRatio = remap(s.startRatio);
+        s.endRatio = remap(s.endRatio);
+      });
+      turn.startRatio = remap(turn.startRatio);
+      turn.endRatio = remap(turn.endRatio);
+    });
+    state.anchoredTurns.add(first); // this boundary is measured — never re-snap it
+    first += counts[k];
+  }
+}
+
 /* Word-count apportioning drifts because speech has pauses the text doesn't:
    captions were landing ahead of the audio. The RMS peaks envelope (already
    fetched for the waveform) shows exactly where speech pauses, so snap each
@@ -1369,9 +1402,16 @@ function refineTurnTimings() {
   const noiseFloor = sorted[Math.floor(n * 0.03)] || 0;
   const speechThresh = Math.min(0.2, Math.max(0.08, noiseFloor + 0.06));
 
+  const anchored = state.anchoredTurns || new Set();
   const adjusted = [0];
   let drift = 0; // estimate error accumulates through the take; carry the correction forward
   for (let i = 1; i < turns.length; i += 1) {
+    if (anchored.has(i)) {
+      // Measured chunk boundary — exact already; snapping could only hurt.
+      adjusted.push(Math.max(turns[i].startRatio, adjusted[i - 1] + 1 / n));
+      drift = 0;
+      continue;
+    }
     const est = Math.round(turns[i].startRatio * n) + drift;
     // Search within 35% of this turn's own span: wide enough for real drift,
     // too narrow to ever snap to a neighboring turn's pause.
@@ -1452,7 +1492,16 @@ function updatePlaybackUI() {
     state.activeSyncIndex = active;
     const rows = (state.resultTurns[active] && state.resultTurns[active].rows) || [];
     rows.forEach((row) => {
-      if (row.offsetParent !== null) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      // Scroll only the transcript's own box — scrollIntoView also scrolls
+      // ancestor containers, which visibly yanked the whole dialog on every
+      // turn change.
+      const box = row.parentElement;
+      if (!box || row.offsetParent === null || box.scrollHeight <= box.clientHeight) return;
+      const rowRect = row.getBoundingClientRect();
+      const boxRect = box.getBoundingClientRect();
+      const target = box.scrollTop + (rowRect.top - boxRect.top)
+        - (box.clientHeight - rowRect.height) / 2;
+      box.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
     });
   }
   if (el.playerStage.open) updateStageCaption(ratio);
@@ -1478,32 +1527,26 @@ el.resultAudio.addEventListener("ended", () => setPlayIcons("►"));
 el.resultAudio.addEventListener("timeupdate", updatePlaybackUI);
 el.resultAudio.addEventListener("loadedmetadata", updatePlaybackUI);
 
-/* ---------------- Post-generation polish ----------------
-   Everything here runs live on the playing element — playbackRate for pace
-   (pitch preserved, so no chipmunk) and a small Web Audio graph for tone and
-   levelling. That means it costs nothing and works on a five-hour take, but
-   it shapes playback only; the stored WAV is untouched. */
+/* ---------------- Sound ----------------
+   One choice instead of a mixing desk: Original is the untouched take;
+   Studio/Warm/Bright are loudness-normalized to the podcast standard, with an
+   optional tone shelf. Applied live through a small Web Audio graph, and
+   downloads are rendered server-side with the same settings. */
+const SOUND_MODES = {
+  original: { tone: "neutral", norm: false, hint: "The untouched take, exactly as generated" },
+  studio: { tone: "neutral", norm: true, hint: "Loudness normalized to −16 LUFS podcast standard" },
+  warm: { tone: "warm", norm: true, hint: "Normalized · warm tone — richer lows, softer highs" },
+  bright: { tone: "bright", norm: true, hint: "Normalized · bright tone — crisper, more present" },
+};
+const DEFAULT_SOUND = "studio";
+
 const TONE_CURVES = {
   neutral: { low: 0, high: 0 },
   warm: { low: 4, high: -3 },
   bright: { low: -2, high: 4.5 },
 };
 
-const polish = { ctx: null, low: null, high: null, gain: null, limiter: null, analyser: null, tone: "neutral", audioId: null };
-
-function polishSettings() {
-  return {
-    speed: Number(el.polishSpeed.value),
-    tone: polish.tone,
-    level: el.polishBoost.checked,
-    norm: el.polishNorm.checked,
-  };
-}
-
-function polishIsDefault() {
-  const s = polishSettings();
-  return Math.abs(s.speed - 1) < 0.001 && s.tone === "neutral" && !s.level && !s.norm;
-}
+const polish = { ctx: null, low: null, high: null, gain: null, limiter: null, analyser: null, mode: DEFAULT_SOUND, audioId: null };
 
 const NORM_TARGET_DB = -16; // keep in sync with the server's NORM_TARGET_DB
 
@@ -1549,68 +1592,43 @@ function ensureAudioGraph() {
     polish.analyser = polish.ctx.createAnalyser();
     polish.analyser.fftSize = 512;
     polish.limiter.connect(polish.analyser);
-    applyPolish();
+    applySound();
     return true;
   } catch (error) {
-    console.warn("Audio polish unavailable:", error);
+    console.warn("Audio graph unavailable:", error);
     polish.ctx = null;
     return false;
   }
 }
 
-function applyPolish() {
-  const speed = Number(el.polishSpeed.value);
-  el.resultAudio.preservesPitch = true;
-  el.resultAudio.mozPreservesPitch = true;
-  el.resultAudio.webkitPreservesPitch = true;
-  el.resultAudio.playbackRate = speed;
-  el.polishSpeedValue.textContent = `${speed.toFixed(2)}×`;
-
-  el.polishTone.querySelectorAll("button").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.tone === polish.tone);
+function applySound() {
+  const mode = SOUND_MODES[polish.mode] || SOUND_MODES[DEFAULT_SOUND];
+  el.soundSeg.querySelectorAll("button").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.sound === polish.mode);
   });
+  el.soundHint.textContent = `${mode.hint} · downloads match what you hear`;
 
   updateExportLinks();
 
-  // Normalization sets the level outright, so the blind 1.6× lift is
-  // redundant while it's on — same precedence as the server export.
-  el.polishBoost.disabled = el.polishNorm.checked;
-
   if (!polish.ctx) return;
-  const curve = TONE_CURVES[polish.tone] || TONE_CURVES.neutral;
+  const curve = TONE_CURVES[mode.tone] || TONE_CURVES.neutral;
   polish.low.gain.value = curve.low;
   polish.high.gain.value = curve.high;
-  polish.gain.gain.value = el.polishNorm.checked
-    ? normalizeGain()
-    : (el.polishBoost.checked ? 1.6 : 1);
+  polish.gain.gain.value = mode.norm ? normalizeGain() : 1;
 }
 
-/* Downloads carry the polish settings: default settings stream the stored take
+/* Downloads carry the sound choice: Original streams the stored take
    untouched, anything else is rendered by the server. */
 function updateExportLinks() {
   if (!polish.audioId) return;
   const plain = `/api/audio/${polish.audioId}`;
-  const s = polishSettings();
-  const query = `speed=${s.speed}&tone=${s.tone}&level=${s.level}&norm=${s.norm}`;
-  const isDefault = polishIsDefault();
-  const wavUrl = isDefault ? plain : `${plain}/export?${query}&fmt=wav`;
-  const mp3Url = isDefault ? `${plain}.mp3` : `${plain}/export?${query}&fmt=mp3`;
-  el.downloadBtn.href = wavUrl;
-  el.stageDownloadBtn.href = wavUrl;
-  el.downloadMp3Btn.href = mp3Url;
-  el.stageDownloadMp3Btn.href = mp3Url;
-  el.polishNote.textContent = isDefault
-    ? "No polish applied — you're hearing (and would download) the original take."
-    : "Polish is live in your playback right now · downloads are rendered with the same settings (that can take a moment).";
-  updatePolishToggleLabel();
-}
-
-// The button says whether polish is actually shaping the audio, so it's clear
-// the settings are live and not download-only.
-function updatePolishToggleLabel() {
-  el.stagePolishToggle.textContent = !el.polishPanel.hidden
-    ? "Hide polish"
-    : polishIsDefault() ? "Polish" : "Polish · on";
+  const mode = SOUND_MODES[polish.mode] || SOUND_MODES[DEFAULT_SOUND];
+  const isOriginal = polish.mode === "original";
+  const query = `speed=1&tone=${mode.tone}&level=false&norm=${mode.norm}`;
+  el.downloadBtn.href = isOriginal ? plain : `${plain}/export?${query}&fmt=wav`;
+  el.stageDownloadBtn.href = el.downloadBtn.href;
+  el.downloadMp3Btn.href = isOriginal ? `${plain}.mp3` : `${plain}/export?${query}&fmt=mp3`;
+  el.stageDownloadMp3Btn.href = el.downloadMp3Btn.href;
 }
 
 // Encoding/rendering happens on the server when the link is clicked, and a
@@ -1659,7 +1677,7 @@ function showTakeGone() {
       showTakeGone();
       return;
     }
-    if (kind === "MP3" || !polishIsDefault()) noteExportStarted(kind);
+    if (kind === "MP3" || polish.mode !== "original") noteExportStarted(kind);
     anchor.dataset.verified = "1";
     anchor.click();
   });
@@ -1670,40 +1688,19 @@ el.resultAudio.addEventListener("error", () => {
   if (el.resultAudio.getAttribute("src")) showTakeGone();
 });
 
-function polishTouched() {
-  ensureAudioGraph();
-  if (polish.ctx && polish.ctx.state === "suspended") polish.ctx.resume();
-  applyPolish();
-}
-
-el.polishSpeed.addEventListener("input", polishTouched);
-el.polishBoost.addEventListener("change", polishTouched);
-el.polishNorm.addEventListener("change", polishTouched);
-el.polishTone.querySelectorAll("button").forEach((btn) => {
+el.soundSeg.querySelectorAll("button").forEach((btn) => {
   btn.addEventListener("click", () => {
-    polish.tone = btn.dataset.tone;
-    polishTouched();
+    polish.mode = btn.dataset.sound;
+    ensureAudioGraph();
+    if (polish.ctx && polish.ctx.state === "suspended") polish.ctx.resume();
+    applySound();
   });
-});
-el.polishReset.addEventListener("click", () => {
-  el.polishSpeed.value = "1";
-  el.polishBoost.checked = false;
-  el.polishNorm.checked = false;
-  polish.tone = "neutral";
-  polishTouched();
-});
-el.stagePolishToggle.addEventListener("click", () => {
-  el.polishPanel.hidden = !el.polishPanel.hidden;
-  updatePolishToggleLabel();
-  if (!el.polishPanel.hidden) {
-    polishTouched();
-    el.polishPanel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }
 });
 // A suspended context would silence the element now that audio routes through it.
 el.resultAudio.addEventListener("play", () => {
   if (polish.ctx && polish.ctx.state === "suspended") polish.ctx.resume();
 });
+applySound();  // paint the default chip before any take exists
 
 /* ---------------- Speaker orbs ----------------
    One glowing orb per speaker on the stage; the one who's talking swells with
@@ -1755,8 +1752,10 @@ function orbFrame() {
     const talking = !audio.paused && speaker === activeSpeaker;
     orb.classList.toggle("talking", talking);
     if (talking) {
-      orb.style.transform = `scale(${(1.06 + level * 0.55).toFixed(3)})`;
-      orb.style.setProperty("--glow", (0.35 + level * 0.65).toFixed(3));
+      // Modest scale — the energy shows in the glow, and the orb must never
+      // swell over the name label beneath it.
+      orb.style.transform = `scale(${(1.04 + level * 0.18).toFixed(3)})`;
+      orb.style.setProperty("--glow", (0.3 + level * 0.7).toFixed(3));
     } else {
       orb.style.transform = "";
       orb.style.removeProperty("--glow");
@@ -2124,7 +2123,7 @@ async function fetchPeaks(audioId) {
 // requests and the download buttons are plain links, so the browser's own
 // download manager handles hundreds of megabytes instead of the page buffering
 // the whole file before anything can be heard.
-async function presentTake(audioId, durationSeconds, snapshot) {
+async function presentTake(audioId, durationSeconds, snapshot, anchors = null) {
   setStatus("complete");
   const url = `/api/audio/${audioId}`;
   el.resultAudio.src = url;
@@ -2137,15 +2136,16 @@ async function presentTake(audioId, durationSeconds, snapshot) {
   el.playerTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
   el.stageTime.textContent = `0:00 / ${formatClock(durationSeconds)}`;
   setPlayIcons("►");
-  applyPolish();  // carry the listener's speed/tone onto the new take
+  applySound();  // carry the listener's sound choice onto the new take
   buildSyncedTranscript(snapshot);
   el.dockEmpty.hidden = true;
   el.resultBlock.classList.add("visible");
   state.takeDuration = durationSeconds;
+  applyChunkAnchors(anchors, durationSeconds);
   buildStageOrbs();
   state.wavePeaks = await fetchPeaks(audioId);
   refineTurnTimings();
-  applyPolish();  // the new take's measured loudness changes the live norm gain
+  applySound();  // the new take's measured loudness changes the live norm gain
   rebuildDockWave();
   openPlayerStage();
 }
@@ -2342,7 +2342,10 @@ el.generateBtn.addEventListener("click", async () => {
           if (warmupSeconds > 30) saveCalibration(state.model, { warmupSecs: warmupSeconds });
           el.resultModel.textContent = state.model;
           state.resultTitle = el.scriptTitle.textContent;
-          await presentTake(evt.audio_id, evt.audio_duration, turnsSnapshot);
+          const anchors = Array.isArray(evt.chunk_starts_sec) && Array.isArray(evt.chunk_turn_counts)
+            ? { starts: evt.chunk_starts_sec, counts: evt.chunk_turn_counts }
+            : null;
+          await presentTake(evt.audio_id, evt.audio_duration, turnsSnapshot, anchors);
         }
       }
     }
