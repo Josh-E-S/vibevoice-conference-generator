@@ -1351,6 +1351,29 @@ function buildSyncedTranscript(snapshot) {
   });
 }
 
+/* Best case: the backend segmented every turn's start from the audio itself.
+   Apply those directly — no estimating, no snapping. */
+function applyExactTurnTimings(turnStarts, durationSeconds) {
+  state.timingsExact = false;
+  const turns = state.resultTurns;
+  if (!Array.isArray(turnStarts) || turnStarts.length !== turns.length
+      || !turns.length || !durationSeconds) return false;
+  turns.forEach((turn, i) => {
+    const oldStart = turn.startRatio;
+    const oldSpan = turn.endRatio - oldStart || 1e-9;
+    const newStart = turnStarts[i] / durationSeconds;
+    const newEnd = (i + 1 < turns.length ? turnStarts[i + 1] : durationSeconds) / durationSeconds;
+    turn.sentences.forEach((s) => {
+      s.startRatio = newStart + ((s.startRatio - oldStart) / oldSpan) * (newEnd - newStart);
+      s.endRatio = newStart + ((s.endRatio - oldStart) / oldSpan) * (newEnd - newStart);
+    });
+    turn.startRatio = newStart;
+    turn.endRatio = newEnd;
+  });
+  state.timingsExact = true;
+  return true;
+}
+
 /* The backend renders the take in chunks and reports exactly where each chunk
    starts and how many turns it covers. Those are hard anchors: retime the
    word-proportional estimate piecewise between them, so timing error can never
@@ -1392,6 +1415,7 @@ function applyChunkAnchors(anchors, durationSeconds) {
    turn boundary to the nearest silence→speech onset and rescale the turn's
    sentence timings into the corrected span. */
 function refineTurnTimings() {
+  if (state.timingsExact) return; // backend measured every turn; nothing to refine
   const peaks = state.wavePeaks;
   const turns = state.resultTurns;
   if (!peaks || peaks.length < 64 || !turns || turns.length < 2) return;
@@ -2141,7 +2165,9 @@ async function presentTake(audioId, durationSeconds, snapshot, anchors = null) {
   el.dockEmpty.hidden = true;
   el.resultBlock.classList.add("visible");
   state.takeDuration = durationSeconds;
-  applyChunkAnchors(anchors, durationSeconds);
+  if (!applyExactTurnTimings(anchors && anchors.turnStarts, durationSeconds)) {
+    applyChunkAnchors(anchors, durationSeconds);
+  }
   buildStageOrbs();
   state.wavePeaks = await fetchPeaks(audioId);
   refineTurnTimings();
@@ -2343,7 +2369,7 @@ el.generateBtn.addEventListener("click", async () => {
           el.resultModel.textContent = state.model;
           state.resultTitle = el.scriptTitle.textContent;
           const anchors = Array.isArray(evt.chunk_starts_sec) && Array.isArray(evt.chunk_turn_counts)
-            ? { starts: evt.chunk_starts_sec, counts: evt.chunk_turn_counts }
+            ? { starts: evt.chunk_starts_sec, counts: evt.chunk_turn_counts, turnStarts: evt.turn_starts_sec }
             : null;
           await presentTake(evt.audio_id, evt.audio_duration, turnsSnapshot, anchors);
         }

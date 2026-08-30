@@ -367,6 +367,114 @@ class VibeVoiceModel:
                 chunks.append("\n".join(cur))
         return chunks
 
+    @staticmethod
+    def _turn_offsets_in_chunk(audio, sample_rate: int, word_counts: list) -> list:
+        """Estimate where each turn starts inside one rendered chunk, in seconds.
+
+        Word counts give a prior for each boundary; the audio's 20 ms energy
+        envelope supplies real inter-turn dips. A small DP picks, for every
+        boundary, either a genuine energy gap near its prior or the prior
+        itself, keeping boundaries ordered. This runs on the raw 24 kHz audio,
+        so it catches the brief dips of fast one-phrase exchanges that the
+        browser's coarse waveform peaks cannot see.
+        """
+        import numpy as np
+        n_turns = len(word_counts)
+        if n_turns == 0:
+            return []
+        offsets = [0.0]
+        if n_turns == 1:
+            return offsets
+        if len(audio) < sample_rate:
+            dur = len(audio) / sample_rate
+            total = float(sum(word_counts)) or 1.0
+            acc = 0.0
+            for w in word_counts[:-1]:
+                acc += w
+                offsets.append(round(acc / total * dur, 3))
+            return offsets
+
+        hop = int(0.02 * sample_rate)
+        n_frames = len(audio) // hop
+        env = np.sqrt(np.mean(np.square(
+            np.asarray(audio[:n_frames * hop], dtype=np.float32).reshape(n_frames, hop)), axis=1))
+        env = np.convolve(env, np.ones(3) / 3, mode="same")
+        env = env / (float(env.max()) or 1.0)
+        duration = n_frames * hop / sample_rate
+
+        total_words = float(sum(word_counts)) or 1.0
+        cum = np.cumsum(word_counts).astype(float)
+        priors = (cum[:-1] / total_words) * duration          # N-1 boundary priors
+        turn_durs = (np.asarray(word_counts, dtype=float) / total_words) * duration
+
+        # Candidate boundaries: runs of near-silence; a boundary sits at the
+        # end of a run (the next speaker's onset). Score by run length.
+        floor = float(np.percentile(env, 2))
+        thresh = max(0.06, min(0.15, floor + 0.05))
+        quiet = env < thresh
+        gaps = []  # (onset_time_sec, gap_len_sec)
+        run = 0
+        for f in range(n_frames):
+            if quiet[f]:
+                run += 1
+            else:
+                if run >= 2:  # >= 40 ms of quiet
+                    gaps.append((f * hop / sample_rate, run * hop / sample_rate))
+                run = 0
+
+        # Assign one candidate per boundary with a small DP: each boundary may
+        # take a genuine gap near its prior (cheap, cheaper still for long
+        # gaps) or fall back to the prior itself, and boundaries must stay
+        # ordered. DP (rather than greedy) keeps a mis-grabbed gap at one
+        # boundary from cascading into the rest.
+        MIN_SEP = 0.3
+        PRIOR_COST = 0.8
+        cand_sets = []
+        for i, prior in enumerate(priors):
+            dur_l, dur_r = turn_durs[i], turn_durs[i + 1]
+            scale = max(0.4, 0.5 * min(dur_l, dur_r))
+            cands = [(min(max(prior, 0.05), duration - 0.05), PRIOR_COST)]
+            for t, glen in gaps:
+                # A gap can serve this boundary only if it lies inside this
+                # boundary's own turns — beyond that it belongs to a neighbour.
+                if t < prior - 0.9 * dur_l or t > prior + 0.9 * dur_r:
+                    continue
+                dev = min(4.0, (abs(t - prior) / scale) ** 2) * 0.5
+                cands.append((t, dev - 3.0 * min(glen, 0.6)))
+            cand_sets.append(cands)
+
+        INF = float("inf")
+        best = [c for _, c in cand_sets[0]]
+        back = [[-1] * len(cs) for cs in cand_sets]
+        for i in range(1, len(cand_sets)):
+            cur = [INF] * len(cand_sets[i])
+            for j, (t, cost) in enumerate(cand_sets[i]):
+                for k, (pt, _) in enumerate(cand_sets[i - 1]):
+                    if pt <= t - MIN_SEP and best[k] + cost < cur[j]:
+                        cur[j] = best[k] + cost
+                        back[i][j] = k
+            # If ordering left no feasible predecessor, chain from the best
+            # previous state anyway — monotonicity is restored below.
+            for j in range(len(cur)):
+                if cur[j] == INF:
+                    k = int(np.argmin(best))
+                    cur[j] = best[k] + cand_sets[i][j][1] + 2.0
+                    back[i][j] = k
+            best = cur
+
+        j = int(np.argmin(best))
+        chosen = [0.0] * len(cand_sets)
+        for i in range(len(cand_sets) - 1, -1, -1):
+            chosen[i] = cand_sets[i][j][0]
+            j = back[i][j] if i > 0 else 0
+        # Enforce strict ordering whatever the DP produced.
+        prev = 0.0
+        results = []
+        for c in chosen:
+            prev = max(c, prev + MIN_SEP)
+            results.append(min(prev, duration - 0.05))
+        return offsets + results
+
     @classmethod
     def _chunk_starts(cls, pieces: list, sample_rate: int) -> list:
         """Where each chunk begins in the crossfade-concatenated take, in seconds.
@@ -943,15 +1051,30 @@ class VibeVoiceModel:
             log_lines.append("Complete!")
             log_text = "\n".join(log_lines)
 
-            # Chunk timing map: where each rendered chunk starts in the final
-            # take and how many script turns it covers. The frontend anchors
-            # caption timing to these instead of guessing from word counts.
+            # Timing map: where each rendered chunk starts in the final take,
+            # how many script turns it covers, and — segmented from each
+            # chunk's own energy envelope — where every individual turn
+            # begins. The frontend drives captions off these instead of
+            # guessing from word counts. Fail-open: captions degrade, renders
+            # never break.
             timing_extra = None
-            if len(final_pieces) == len(chunks):
-                timing_extra = {
-                    "chunk_starts_sec": self._chunk_starts(final_pieces, sample_rate),
-                    "chunk_turn_counts": [c.count("\n") + 1 for c in chunks],
-                }
+            try:
+                if len(final_pieces) == len(chunks):
+                    chunk_starts = self._chunk_starts(final_pieces, sample_rate)
+                    timing_extra = {
+                        "chunk_starts_sec": chunk_starts,
+                        "chunk_turn_counts": [c.count("\n") + 1 for c in chunks],
+                    }
+                    turn_starts = []
+                    for piece, chunk_text, s0 in zip(final_pieces, chunks, chunk_starts):
+                        lines = chunk_text.split("\n")
+                        wcs = [max(1, len(l.split(":", 1)[-1].split())) for l in lines]
+                        offs = self._turn_offsets_in_chunk(piece, sample_rate, wcs)
+                        turn_starts.extend(round(s0 + o, 3) for o in offs)
+                    if len(turn_starts) == sum(timing_extra["chunk_turn_counts"]):
+                        timing_extra["turn_starts_sec"] = turn_starts
+            except Exception as timing_err:
+                print(f"Turn timing map failed (non-fatal): {timing_err}")
 
             yield self._emit_progress(
                 stage="complete",
