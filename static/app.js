@@ -83,7 +83,7 @@ const el = {};
   "playerStage", "stageTitle", "stagePlayBtn", "stageWaveform", "stageTime",
   "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn", "stageOrbs",
   "stageScriptToggle", "stageTranscript", "stagePolishToggle", "polishPanel",
-  "polishSpeed", "polishSpeedValue", "polishTone", "polishBoost", "polishReset",
+  "polishSpeed", "polishSpeedValue", "polishTone", "polishBoost", "polishNorm", "polishReset",
   "polishNote", "polishStatus",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
   "realtimeRow", "realtimeFactor", "warmupRow", "warmupTime",
@@ -1496,12 +1496,23 @@ function polishSettings() {
     speed: Number(el.polishSpeed.value),
     tone: polish.tone,
     level: el.polishBoost.checked,
+    norm: el.polishNorm.checked,
   };
 }
 
 function polishIsDefault() {
   const s = polishSettings();
-  return Math.abs(s.speed - 1) < 0.001 && s.tone === "neutral" && !s.level;
+  return Math.abs(s.speed - 1) < 0.001 && s.tone === "neutral" && !s.level && !s.norm;
+}
+
+const NORM_TARGET_DB = -16; // keep in sync with the server's NORM_TARGET_DB
+
+// Live-preview gain for loudness normalization, from the loudness the peaks
+// endpoint measured. The limiter at the end of the graph catches peaks.
+function normalizeGain() {
+  const measured = state.takeLoudnessDb;
+  if (!Number.isFinite(measured)) return 1;
+  return Math.min(8, Math.max(0.05, 10 ** ((NORM_TARGET_DB - measured) / 20)));
 }
 
 function ensureAudioGraph() {
@@ -1561,11 +1572,17 @@ function applyPolish() {
 
   updateExportLinks();
 
+  // Normalization sets the level outright, so the blind 1.6× lift is
+  // redundant while it's on — same precedence as the server export.
+  el.polishBoost.disabled = el.polishNorm.checked;
+
   if (!polish.ctx) return;
   const curve = TONE_CURVES[polish.tone] || TONE_CURVES.neutral;
   polish.low.gain.value = curve.low;
   polish.high.gain.value = curve.high;
-  polish.gain.gain.value = el.polishBoost.checked ? 1.6 : 1;
+  polish.gain.gain.value = el.polishNorm.checked
+    ? normalizeGain()
+    : (el.polishBoost.checked ? 1.6 : 1);
 }
 
 /* Downloads carry the polish settings: default settings stream the stored take
@@ -1574,7 +1591,7 @@ function updateExportLinks() {
   if (!polish.audioId) return;
   const plain = `/api/audio/${polish.audioId}`;
   const s = polishSettings();
-  const query = `speed=${s.speed}&tone=${s.tone}&level=${s.level}`;
+  const query = `speed=${s.speed}&tone=${s.tone}&level=${s.level}&norm=${s.norm}`;
   const isDefault = polishIsDefault();
   const wavUrl = isDefault ? plain : `${plain}/export?${query}&fmt=wav`;
   const mp3Url = isDefault ? `${plain}.mp3` : `${plain}/export?${query}&fmt=mp3`;
@@ -1661,6 +1678,7 @@ function polishTouched() {
 
 el.polishSpeed.addEventListener("input", polishTouched);
 el.polishBoost.addEventListener("change", polishTouched);
+el.polishNorm.addEventListener("change", polishTouched);
 el.polishTone.querySelectorAll("button").forEach((btn) => {
   btn.addEventListener("click", () => {
     polish.tone = btn.dataset.tone;
@@ -1670,6 +1688,7 @@ el.polishTone.querySelectorAll("button").forEach((btn) => {
 el.polishReset.addEventListener("click", () => {
   el.polishSpeed.value = "1";
   el.polishBoost.checked = false;
+  el.polishNorm.checked = false;
   polish.tone = "neutral";
   polishTouched();
 });
@@ -2093,7 +2112,9 @@ async function fetchPeaks(audioId) {
   try {
     const res = await fetch(`/api/audio/${audioId}/peaks?buckets=2048`);
     if (!res.ok) return null;
-    return (await res.json()).peaks || null;
+    const body = await res.json();
+    state.takeLoudnessDb = Number.isFinite(body.loudness_db) ? body.loudness_db : null;
+    return body.peaks || null;
   } catch {
     return null;  // waveform is decoration; never fail a finished take over it
   }
@@ -2124,6 +2145,7 @@ async function presentTake(audioId, durationSeconds, snapshot) {
   buildStageOrbs();
   state.wavePeaks = await fetchPeaks(audioId);
   refineTurnTimings();
+  applyPolish();  // the new take's measured loudness changes the live norm gain
   rebuildDockWave();
   openPlayerStage();
 }

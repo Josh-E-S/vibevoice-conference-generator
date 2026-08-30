@@ -966,7 +966,28 @@ def _time_stretch(x: np.ndarray, rate: float) -> np.ndarray:
     return out / norm
 
 
-def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool) -> bytes:
+NORM_TARGET_DB = -16.0   # podcast delivery standard (≈ -16 LUFS for speech)
+NORM_GATE_DB = -20.0     # frames this far under the loudest count as pauses
+NORM_GATE_FLOOR = -45.0  # absolute silence gate
+
+
+def _gated_loudness_db(frame_rms: np.ndarray) -> float | None:
+    """Approximate integrated loudness from 400 ms frame RMS values.
+
+    Gated RMS tracks LUFS closely for mono speech; pauses are excluded so a
+    take with long silences isn't measured as quiet and over-boosted.
+    """
+    if frame_rms.size == 0:
+        return None
+    thresh = max(float(frame_rms.max()) * 10 ** (NORM_GATE_DB / 20), 10 ** (NORM_GATE_FLOOR / 20))
+    active = frame_rms[frame_rms >= thresh]
+    if not active.size:
+        return None
+    gated = float(np.sqrt(np.mean(np.square(active))))
+    return 20 * np.log10(max(gated, 1e-9))
+
+
+def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool, norm: bool = False) -> bytes:
     """Apply the polish settings to a stored take and return a new WAV.
 
     Processed in blocks so a five-hour render doesn't need gigabytes at once.
@@ -990,6 +1011,8 @@ def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool) -> bytes
     block = POLISH_BLOCK_SECONDS * sample_rate
     overlap = int(0.025 * sample_rate)  # crossfade between stretched blocks
     fade = np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+    norm_frame = int(0.4 * sample_rate)  # loudness measurement frames
+    frame_rms_parts: list[np.ndarray] = []
     pieces: list[np.ndarray] = []
     peak = 1e-6
     sq_sum = 0.0
@@ -1007,9 +1030,24 @@ def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool) -> bytes
             peak = max(peak, float(np.abs(chunk).max()))
             sq_sum += float(np.dot(chunk, chunk))
             sq_n += len(chunk)
+            if norm:
+                usable = (len(chunk) // norm_frame) * norm_frame
+                if usable:
+                    frames = chunk[:usable].reshape(-1, norm_frame)
+                    frame_rms_parts.append(np.sqrt(np.mean(np.square(frames), axis=1)))
         pieces.append(chunk)
 
-    if level:
+    if norm:
+        # Normalize to the delivery standard — up or down, and independent of
+        # the other polish options: this changes level only, never character.
+        loudness_db = _gated_loudness_db(
+            np.concatenate(frame_rms_parts) if frame_rms_parts else np.array([])
+        )
+        if loudness_db is None:
+            gain = float(min(1.0, 0.99 / peak))
+        else:
+            gain = float(np.clip(10 ** ((NORM_TARGET_DB - loudness_db) / 20), 0.05, 8.0))
+    elif level:
         # Lift quiet speech toward a target loudness; the limiter below only
         # touches peaks, so this raises level without squashing the whole take.
         # Boost-only: a take that is already at a healthy level is left alone
@@ -1023,7 +1061,7 @@ def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool) -> bytes
     out = bytearray()
     for chunk in pieces:
         y = chunk * gain
-        if level:
+        if level or norm:
             mag = np.abs(y)
             over = mag > KNEE
             if over.any():
@@ -1074,7 +1112,7 @@ async def api_audio_mp3(audio_id: str) -> Response:
     )
 
 
-POLISH_CACHE: dict[tuple, bytes] = {}   # (audio_id, speed, tone, level, fmt) -> bytes
+POLISH_CACHE: dict[tuple, bytes] = {}   # (audio_id, speed, tone, level, norm, fmt) -> bytes
 
 
 @app.get("/api/audio/{audio_id}/export")
@@ -1083,6 +1121,7 @@ async def api_audio_export(
     speed: float = 1.0,
     tone: str = "neutral",
     level: bool = False,
+    norm: bool = False,
     fmt: str = "wav",
 ) -> Response:
     """Download the take with the polish settings baked in."""
@@ -1092,12 +1131,12 @@ async def api_audio_export(
     speed = round(min(1.25, max(0.8, speed)), 2)
     tone = tone if tone in TONE_SHELVES else "neutral"
     fmt = "mp3" if fmt == "mp3" else "wav"
-    key = (audio_id, speed, tone, bool(level), fmt)
+    key = (audio_id, speed, tone, bool(level), bool(norm), fmt)
     if key not in POLISH_CACHE:
         _, wav_bytes = entry
         loop = asyncio.get_event_loop()
         processed = await loop.run_in_executor(
-            None, _polish_wav, wav_bytes, speed, tone, bool(level)
+            None, _polish_wav, wav_bytes, speed, tone, bool(level), bool(norm)
         )
         if fmt == "mp3":
             processed = await loop.run_in_executor(None, _encode_mp3, processed)
@@ -1139,9 +1178,12 @@ async def api_audio_peaks(audio_id: str, buckets: int = 2048) -> dict:
     else:
         rms = np.sqrt(np.mean(np.square(sub[:usable].reshape(buckets, -1)), axis=1))
     peak = float(rms.max()) or 1.0
+    loudness_db = _gated_loudness_db(np.asarray(rms))
     return {
         "peaks": [round(float(v) / peak, 4) for v in rms],
         "duration": total / float(sample_rate),
+        # Gated loudness of the take, so the player can preview normalization live.
+        "loudness_db": round(loudness_db, 2) if loudness_db is not None else None,
     }
 
 
