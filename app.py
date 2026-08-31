@@ -34,13 +34,17 @@ VOICE_INFO = {
     "Cherry": {"gender": "F", "tags": ["Warm", "Storyteller"], "color": "#E2582A"},
     "Chicago": {"gender": "M", "tags": ["Deep", "Narrator"], "color": "#2F6F63"},
     "Janus": {"gender": "M", "tags": ["Bright", "Conversational"], "color": "#CC8A2E"},
-    "Mantis": {"gender": "F", "tags": ["Crisp", "Energetic"], "color": "#7B4B94"},
-    "Sponge": {"gender": "M", "tags": ["Playful", "Animated"], "color": "#3A7CA5"},
     "Starchild": {"gender": "F", "tags": ["Airy", "Dreamy"], "color": "#B6558C"},
+    # Public-domain additions (2026-08-31): pre-1923 US recordings and
+    # LibriVox readings, prepared as 60 s 24 kHz mono references.
+    "Cylinder": {"gender": "M", "tags": ["Antique", "1900s"], "color": "#8A6D3B"},
+    "Statesman": {"gender": "M", "tags": ["Historic", "Orator"], "color": "#3A7CA5"},
+    "Novella": {"gender": "F", "tags": ["Classic", "Reader"], "color": "#7B4B94"},
+    "Eyre": {"gender": "F", "tags": ["Elegant", "Literary"], "color": "#6E8B3D"},
 }
 VOICE_GENDERS = {name: info["gender"] for name, info in VOICE_INFO.items()}
 AVAILABLE_VOICES = list(VOICE_GENDERS.keys())
-DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Mantis"]
+DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Novella"]
 
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 WORDS_PER_MINUTE = 150             # Matches the pace assumed by the client's duration estimate
@@ -674,7 +678,13 @@ async def api_voices() -> list[dict]:
             "gender": info["gender"],
             "tags": info["tags"],
             "color": info["color"],
-            "preview_url": f"/public/voices/{name}.mp3",
+            # Older previews are MP3; new ones are AAC (no MP3 encoder in the
+            # prep pipeline). Serve whichever exists.
+            "preview_url": (
+                f"/public/voices/{name}.mp3"
+                if (ROOT / "public" / "voices" / f"{name}.mp3").exists()
+                else f"/public/voices/{name}.m4a"
+            ),
         }
         for name, info in VOICE_INFO.items()
     ]
