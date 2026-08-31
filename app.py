@@ -30,21 +30,22 @@ MODAL_STUB_NAME = "vibevoice-generator"
 MODAL_CLASS_NAME = "VibeVoiceModel"
 
 AVAILABLE_MODELS = ["VibeVoice-1.5B", "VibeVoice-7B"]
+# Dict order is presentation order in the UI voice library.
 VOICE_INFO = {
-    "Cherry": {"gender": "F", "tags": ["Warm", "Storyteller"], "color": "#E2582A"},
-    "Chicago": {"gender": "M", "tags": ["Deep", "Narrator"], "color": "#2F6F63"},
-    "Janus": {"gender": "M", "tags": ["Bright", "Conversational"], "color": "#CC8A2E"},
-    "Starchild": {"gender": "F", "tags": ["Airy", "Dreamy"], "color": "#B6558C"},
     # Public-domain additions (2026-08-31): pre-1923 US recordings and
     # LibriVox readings, prepared as 60 s 24 kHz mono references.
     "Cylinder": {"gender": "M", "tags": ["Antique", "1900s"], "color": "#8A6D3B"},
     "Statesman": {"gender": "M", "tags": ["Historic", "Orator"], "color": "#3A7CA5"},
     "Novella": {"gender": "F", "tags": ["Classic", "Reader"], "color": "#7B4B94"},
     "Eyre": {"gender": "F", "tags": ["Elegant", "Literary"], "color": "#6E8B3D"},
+    "Cherry": {"gender": "F", "tags": ["Warm", "Storyteller"], "color": "#E2582A"},
+    "Chicago": {"gender": "M", "tags": ["Deep", "Narrator"], "color": "#2F6F63"},
+    "Janus": {"gender": "M", "tags": ["Bright", "Conversational"], "color": "#CC8A2E"},
+    "Starchild": {"gender": "F", "tags": ["Airy", "Dreamy"], "color": "#B6558C"},
 }
 VOICE_GENDERS = {name: info["gender"] for name, info in VOICE_INFO.items()}
 AVAILABLE_VOICES = list(VOICE_GENDERS.keys())
-DEFAULT_SPEAKERS = ["Cherry", "Chicago", "Janus", "Novella"]
+DEFAULT_SPEAKERS = ["Cylinder", "Statesman", "Novella", "Eyre"]
 
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 WORDS_PER_MINUTE = 150             # Matches the pace assumed by the client's duration estimate
