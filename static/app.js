@@ -2003,8 +2003,18 @@ function paintProgress() {
   el.genStagePct.classList.remove("warming");
   if (progress.chunksTotal && progress.chunksDone) {
     // Streamed chunks are the ground truth — every rendered chunk is a real,
-    // gate-approved fraction of the take.
-    const frac = Math.min(0.985, progress.chunksDone / progress.chunksTotal);
+    // gate-approved fraction of the take. Between chunk deliveries (waves
+    // land minutes apart), creep toward the next milestone on the calibrated
+    // wave estimate so the bar never sits frozen; the monotonic guard below
+    // stops it ever moving backwards.
+    let frac = progress.chunksDone / progress.chunksTotal;
+    const est = waveEstimateSecs();
+    if (est && progress.lastChunkAt) {
+      const since = (Date.now() - progress.lastChunkAt) / 1000;
+      frac += Math.min(since / est, 0.92) * (1 - frac) * 0.9;
+    }
+    frac = Math.min(0.985, Math.max(frac, progress.peakFrac || 0));
+    progress.peakFrac = frac;
     el.progressTrack.hidden = false;
     el.genStageTrack.hidden = false;
     el.progressTrack.classList.remove("indeterminate");
@@ -2015,8 +2025,9 @@ function paintProgress() {
     pctText = `${Math.round(frac * 100)}%`;
     document.title = `${pctText} · Chorus`;
     parts.push(`${progress.chunksDone} of ${progress.chunksTotal} chunks`);
-    if (frac > 0.05 && frac < 1) {
-      const eta = formatMinutes(elapsed * (1 - frac) / frac);
+    const doneFrac = progress.chunksDone / progress.chunksTotal;
+    if (doneFrac > 0.05 && doneFrac < 1) {
+      const eta = formatMinutes(elapsed * (1 - doneFrac) / doneFrac);
       if (eta) parts.push(`~${eta} left`);
     }
   } else if (progress.totalWaves) {
@@ -2037,7 +2048,11 @@ function paintProgress() {
       ? Math.min(avgWave ? 0.98 : 0.95, sinceWave / estWave)
       : 0;
     const indeterminate = !estWave;
-    const frac = (done + inWave) / progress.totalWaves;
+    let frac = (done + inWave) / progress.totalWaves;
+    if (!indeterminate) {
+      frac = Math.max(frac, progress.peakFrac || 0);
+      progress.peakFrac = frac;
+    }
 
     el.progressTrack.hidden = false;
     el.genStageTrack.hidden = false;
@@ -2110,6 +2125,8 @@ function startProgress() {
   progress.chunks = 0;
   progress.chunksDone = 0;
   progress.chunksTotal = 0;
+  progress.lastChunkAt = 0;
+  progress.peakFrac = 0;
   progress.scriptWords = state.turns.reduce((n, t) => n + (t.text || "").split(/\s+/).filter(Boolean).length, 0);
   resetPreview();
   el.progressFill.style.width = "0%";
@@ -2537,6 +2554,7 @@ el.generateBtn.addEventListener("click", async () => {
           if (Number.isFinite(evt.chunk_index)) {
             progress.chunksDone = Math.max(progress.chunksDone, evt.chunk_index + 1);
             progress.chunksTotal = evt.chunk_total || progress.chunksTotal;
+            progress.lastChunkAt = Date.now();
           }
           handleStreamChunk(evt); // async on purpose — never block the event stream
         }

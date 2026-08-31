@@ -3,6 +3,7 @@ from __future__ import annotations  # keep np.ndarray hints lazy at deploy time
 import gc
 import io
 import os
+import re
 import time
 import threading
 from datetime import datetime
@@ -310,25 +311,34 @@ class VibeVoiceModel:
     # immediately, which bridges playback until the full-size waves land.
     # Cost: extra context resets within the opening minute (still turn-aligned,
     # same refs, same crossfade, same quality gate).
-    FAST_START_WORDS = 250
+    # 350 words ≈ 140 s of audio: enough buffer to bridge the ~2 min wall time
+    # of the first full-size wave (250 ran dry ~20 s early — 2026-08-31).
+    FAST_START_WORDS = 350
     MINI_CHUNK_WORDS = 50
 
     @classmethod
     def _split_fast_start(cls, chunks: list, batch_cap: int) -> tuple:
-        """Split chunk 0 into turn-aligned mini-chunks for fast first audio.
+        """Regroup the opening ~FAST_START_WORDS into turn-aligned mini-chunks.
 
         Returns (new_chunks, n_fast). n_fast <= 1 means fast start didn't
         apply (opening turn too long to split, or nothing to gain).
         """
-        first_lines = chunks[0].split("\n")
-        if len(first_lines) < 2:
+        # Consume whole chunks from the front until the fast region is big
+        # enough to bridge the first full wave — but always leave at least one
+        # full-size chunk so the bulk keeps normal context spans.
+        take, words = 0, 0
+        while take < len(chunks) - 1 and words < cls.FAST_START_WORDS:
+            words += len(chunks[take].split())
+            take += 1
+        fast_lines = [l for c in chunks[:take] for l in c.split("\n")]
+        if len(fast_lines) < 2:
             return chunks, 0  # single opening turn; nothing turn-aligned to split
-        total_words = sum(len(l.split()) for l in first_lines)
+        total_words = sum(len(l.split()) for l in fast_lines)
         # Never build more minis than fit one batch: the whole point is that
         # the fast wave renders in a single batched call.
         target = max(cls.MINI_CHUNK_WORDS, total_words // batch_cap + 1)
         minis, cur, cur_words = [], [], 0
-        for line in first_lines:
+        for line in fast_lines:
             cur.append(line)
             cur_words += len(line.split())
             if cur_words >= target:
@@ -341,7 +351,7 @@ class VibeVoiceModel:
                 minis.append("\n".join(cur))
         if len(minis) < 2:
             return chunks, 0
-        return minis + chunks[1:], len(minis)
+        return minis + chunks[take:], len(minis)
 
     @classmethod
     def _split_turns_into_chunks(cls, turn_lines: list) -> list:
@@ -852,11 +862,39 @@ class VibeVoiceModel:
                 log_text=log_text,
             )
 
+            # The processor pairs voices with speakers POSITIONALLY after
+            # normalizing ids, and only declares voice_samples[:n_speakers_in_
+            # _chunk]. A chunk whose speaker set isn't {1..k} therefore gets
+            # wrong or undeclared voices — e.g. a chunk containing only
+            # Speaker 2 renders in Speaker 1's voice. Remap each chunk's ids
+            # to a dense 1..k and pass exactly that chunk's voices, in order.
+            _speaker_line = re.compile(r"^Speaker\s+(\d+)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
+            id_base = 0 if any(
+                _speaker_line.match(l) and int(_speaker_line.match(l).group(1)) == 0
+                for l in formatted_script_lines
+            ) else 1
+
+            def _chunk_voice_view(chunk_text):
+                """(remapped_text, voices_for_this_chunk) with dense 1..k ids."""
+                mapping, voices, out = {}, [], []
+                for line in chunk_text.split("\n"):
+                    m = _speaker_line.match(line)
+                    if not m:
+                        out.append(line)
+                        continue
+                    sid = int(m.group(1))
+                    if sid not in mapping:
+                        mapping[sid] = len(mapping) + 1
+                        voices.append(voice_samples[(sid - id_base) % len(voice_samples)])
+                    out.append(f"Speaker {mapping[sid]}: {m.group(2)}")
+                return "\n".join(out), (voices or [voice_samples[0]])
+
             def _generate_batch(text_list):
                 """One batched generate call; returns list of np audio (or None)."""
+                views = [_chunk_voice_view(t) for t in text_list]
                 batch_inputs = processor(
-                    text=text_list,
-                    voice_samples=[voice_samples] * len(text_list),
+                    text=[t for t, _ in views],
+                    voice_samples=[v for _, v in views],
                     padding=True,
                     return_tensors="pt",
                     return_attention_mask=True,
