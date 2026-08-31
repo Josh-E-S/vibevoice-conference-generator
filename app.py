@@ -567,6 +567,18 @@ AUDIO_STORE: dict[str, tuple[float, bytes]] = {}
 LAST_AUDIO: dict = {}  # {"audio_id", "created", "duration"} of the newest finished take
 
 
+# Per-generation streamed chunks, so playback can start while later waves
+# render. Short-lived: once the full take lands the client stops needing them.
+STREAM_CHUNKS: dict[str, dict] = {}  # stream_id -> {"created": ts, "chunks": {idx: wav bytes}}
+STREAM_TTL_SECONDS = 1800
+
+
+def _prune_stream_chunks() -> None:
+    cutoff = time.time() - STREAM_TTL_SECONDS
+    for sid in [s for s, e in STREAM_CHUNKS.items() if e["created"] < cutoff]:
+        STREAM_CHUNKS.pop(sid, None)
+
+
 def _prune_audio_store() -> None:
     now = time.time()
     keep = LAST_AUDIO.get("audio_id")
@@ -840,6 +852,8 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
 
     async def event_stream():
         _prune_audio_store()
+        _prune_stream_chunks()
+        stream_id = uuid.uuid4().hex
 
         async with GENERATION_CONCURRENCY:
             loop = asyncio.get_event_loop()
@@ -880,6 +894,21 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
                     continue
 
                 event = dict(item)
+                # Streamed chunk: store the audio server-side and hand the
+                # client a URL, so the SSE event stays small.
+                chunk_payload = event.pop("chunk_audio", None)
+                if chunk_payload is not None and event.get("chunk_index") is not None:
+                    try:
+                        c_rate, c_array = chunk_payload
+                        entry = STREAM_CHUNKS.setdefault(
+                            stream_id, {"created": time.time(), "chunks": {}}
+                        )
+                        entry["chunks"][int(event["chunk_index"])] = _encode_wav(c_rate, c_array)
+                        event["chunk_url"] = f"/api/stream/{stream_id}/{event['chunk_index']}.wav"
+                        event["chunk_duration"] = len(c_array) / float(c_rate)
+                    except Exception as chunk_err:
+                        print(f"Stream chunk store failed (non-fatal): {chunk_err}")
+                        event.pop("chunk_url", None)
                 audio_payload = event.pop("audio", None)
                 if audio_payload is not None:
                     sample_rate, audio_array = audio_payload
@@ -1168,6 +1197,16 @@ async def api_audio_export(
         media_type="audio/mpeg" if fmt == "mp3" else "audio/wav",
         headers={"Content-Disposition": f'attachment; filename="chorus-polished.{fmt}"'},
     )
+
+
+@app.get("/api/stream/{stream_id}/{index}.wav")
+async def api_stream_chunk(stream_id: str, index: int) -> Response:
+    """One streamed chunk of an in-progress render, for the live preview."""
+    entry = STREAM_CHUNKS.get(stream_id)
+    data = entry["chunks"].get(index) if entry else None
+    if data is None:
+        raise HTTPException(status_code=404, detail="Chunk not available.")
+    return Response(content=data, media_type="audio/wav")
 
 
 @app.get("/api/audio/{audio_id}/peaks")

@@ -303,6 +303,46 @@ class VibeVoiceModel:
     # overshoot costs one halving, never the job. Validated floors were 8/4.
     MAX_BATCH = {"VibeVoice-1.5B": 12, "VibeVoice-7B": 6}  # A100-40GB
 
+    # ---- streaming fast start (2026-08-31) --------------------------------
+    # The opening ~FAST_START_WORDS are split into mini-chunks and rendered as
+    # their own first wave: a batch of tiny chunks finishes in the wall time
+    # of ONE tiny chunk (~20-30 s), delivering ~100 s of playable audio almost
+    # immediately, which bridges playback until the full-size waves land.
+    # Cost: extra context resets within the opening minute (still turn-aligned,
+    # same refs, same crossfade, same quality gate).
+    FAST_START_WORDS = 250
+    MINI_CHUNK_WORDS = 50
+
+    @classmethod
+    def _split_fast_start(cls, chunks: list, batch_cap: int) -> tuple:
+        """Split chunk 0 into turn-aligned mini-chunks for fast first audio.
+
+        Returns (new_chunks, n_fast). n_fast <= 1 means fast start didn't
+        apply (opening turn too long to split, or nothing to gain).
+        """
+        first_lines = chunks[0].split("\n")
+        if len(first_lines) < 2:
+            return chunks, 0  # single opening turn; nothing turn-aligned to split
+        total_words = sum(len(l.split()) for l in first_lines)
+        # Never build more minis than fit one batch: the whole point is that
+        # the fast wave renders in a single batched call.
+        target = max(cls.MINI_CHUNK_WORDS, total_words // batch_cap + 1)
+        minis, cur, cur_words = [], [], 0
+        for line in first_lines:
+            cur.append(line)
+            cur_words += len(line.split())
+            if cur_words >= target:
+                minis.append("\n".join(cur))
+                cur, cur_words = [], 0
+        if cur:
+            if minis and cur_words < target // 3:
+                minis[-1] = minis[-1] + "\n" + "\n".join(cur)
+            else:
+                minis.append("\n".join(cur))
+        if len(minis) < 2:
+            return chunks, 0
+        return minis + chunks[1:], len(minis)
+
     @classmethod
     def _split_turns_into_chunks(cls, turn_lines: list) -> list:
         """Group whole 'Speaker N:' turn lines into ~CHUNK_TARGET_WORDS chunks.
@@ -792,9 +832,15 @@ class VibeVoiceModel:
             batch_cap = self.MAX_BATCH.get(model_name, 4)
             use_parallel = len(chunks) > 1
 
+            n_fast = 0
+            if use_parallel:
+                chunks, n_fast = self._split_fast_start(chunks, batch_cap)
+
             if use_parallel:
                 log_lines.append(
-                    f"Parallel mode: {len(chunks)} chunks, batches of up to {batch_cap}"
+                    f"Parallel mode: {len(chunks)} chunks"
+                    + (f" (fast-start {n_fast})" if n_fast else "")
+                    + f", batches of up to {batch_cap}"
                 )
             else:
                 log_lines.append("Short script: single-pass generation")
@@ -905,7 +951,15 @@ class VibeVoiceModel:
             audio = None
             ran_parallel = False
             try:
-                waves = [chunks[i:i + batch_cap] for i in range(0, len(chunks), batch_cap)]
+                # The fast-start minis form their own first wave so their wall
+                # time is one mini render, not one full chunk render.
+                if n_fast > 1:
+                    rest = chunks[n_fast:]
+                    waves = [chunks[:n_fast]] + [
+                        rest[i:i + batch_cap] for i in range(0, len(rest), batch_cap)
+                    ]
+                else:
+                    waves = [chunks[i:i + batch_cap] for i in range(0, len(chunks), batch_cap)]
                 all_pieces = []
                 rerolled_total = 0
                 for wi, wave in enumerate(waves):
@@ -931,7 +985,7 @@ class VibeVoiceModel:
                                  for ci in range(len(wave))]
                         failed = [ci for ci, (ok, _, _) in enumerate(gates) if not ok]
                         for ci, (ok, _, reason) in enumerate(gates):
-                            chunk_no = wi * batch_cap + ci + 1
+                            chunk_no = len(all_pieces) + ci + 1
                             # container-log every chunk's metrics (calibration data)
                             print(f"gate: chunk {chunk_no}: {reason}")
                             if not ok:
@@ -959,7 +1013,7 @@ class VibeVoiceModel:
                                     break
                                 ok2, bad2, reason2 = self._chunk_quality(
                                     wave[ci], reroll_pieces[j], 24000)
-                                chunk_no = wi * batch_cap + ci + 1
+                                chunk_no = len(all_pieces) + ci + 1
                                 if ok2 or bad2 < gates[ci][1]:
                                     wave_pieces[ci] = reroll_pieces[j]
                                     rerolled_total += 1
@@ -971,7 +1025,25 @@ class VibeVoiceModel:
                                         f"Quality gate: chunk {chunk_no} reroll no better "
                                         f"({reason2}) — keeping original")
                             log_text = "\n".join(log_lines)
+                    # ---- stream this wave's chunks to the client ----------
+                    # Emitted only AFTER the gate verdict, so streamed audio
+                    # is exactly what the final take will contain.
+                    base = len(all_pieces)
                     all_pieces.extend(wave_pieces)
+                    for ci, piece in enumerate(wave_pieces):
+                        if piece is None or len(piece) == 0:
+                            continue
+                        yield self._emit_progress(
+                            stage="chunk_audio",
+                            pct=min(88, 70 + int(18 * (base + ci + 1) / len(chunks))),
+                            status=f"Chunk {base + ci + 1}/{len(chunks)} rendered",
+                            log_text=log_text,
+                            extra={
+                                "chunk_audio": (24000, piece),
+                                "chunk_index": base + ci,
+                                "chunk_total": len(chunks),
+                            },
+                        )
                 if any(p is None for p in all_pieces):
                     raise RuntimeError("A chunk produced no audio.")
                 if rerolled_total == 0:
@@ -1007,6 +1079,19 @@ class VibeVoiceModel:
                             )
                         else:
                             seq_pieces.extend(tick)
+                    piece = seq_pieces[ci] if ci < len(seq_pieces) else None
+                    if piece is not None and len(piece) > 0:
+                        yield self._emit_progress(
+                            stage="chunk_audio",
+                            pct=min(88, 70 + int(18 * (ci + 1) / len(chunks))),
+                            status=f"Chunk {ci + 1}/{len(chunks)} rendered",
+                            log_text=log_text,
+                            extra={
+                                "chunk_audio": (24000, piece),
+                                "chunk_index": ci,
+                                "chunk_total": len(chunks),
+                            },
+                        )
                 if any(p is None for p in seq_pieces) or not seq_pieces:
                     raise RuntimeError("Error: No audio was generated by the model.")
                 audio = self._crossfade_concat(seq_pieces, 24000)

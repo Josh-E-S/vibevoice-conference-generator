@@ -957,6 +957,36 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   margin: 8px 0 18px;
   font-variant-numeric: tabular-nums;
 }
+/* Live preview row inside the generating pane */
+.gen-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: 10px 0 2px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.gen-preview-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.gen-preview-mute {
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.gen-preview-mute:hover { border-color: var(--accent); color: var(--accent); }
+
 /* Warm-up has no percentage to tick, so the headline itself breathes. */
 .gen-pct.warming { animation: warmBreath 2s ease-in-out infinite; }
 @keyframes warmBreath { 50% { opacity: 0.45; } }

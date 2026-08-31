@@ -77,6 +77,7 @@ const el = {};
   "progressTrack", "progressFill", "progressMeta",
   "stageGenPane", "stagePlayPane", "genStageTitle", "genStagePct", "genStageTrack",
   "genStageFill", "genStageMeta", "genStageDesc", "genStageLog", "genStageStopBtn",
+  "genPreviewRow", "genPreviewLabel", "genPreviewMute",
   "dockEmpty", "resultBlock", "resultWaveform", "resultAudio",
   "playBtn", "playerTime", "syncedTranscript", "openPlayerBtn",
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
@@ -1929,10 +1930,15 @@ function waveEstimateSecs() {
 // The backend log names the batching plan before the first wave starts.
 function noteChunksFromLog(logText) {
   if (!logText || progress.chunks) return;
-  const m = logText.match(/Parallel mode:\s*(\d+)\s*chunks?,\s*batches of up to\s*(\d+)/i);
+  const m = logText.match(/Parallel mode:\s*(\d+)\s*chunks?(?:\s*\(fast-start\s*(\d+)\))?,\s*batches of up to\s*(\d+)/i);
   if (m) {
     progress.chunks = Number(m[1]);
-    if (!progress.totalWaves) progress.totalWaves = Math.ceil(Number(m[1]) / Number(m[2]));
+    const fast = Number(m[2] || 0);
+    if (!progress.totalWaves) {
+      progress.totalWaves = fast > 1
+        ? 1 + Math.ceil((Number(m[1]) - fast) / Number(m[3]))
+        : Math.ceil(Number(m[1]) / Number(m[3]));
+    }
   } else if (/Short script: single-pass/i.test(logText)) {
     progress.chunks = 1;
     if (!progress.totalWaves) progress.totalWaves = 1;
@@ -1995,7 +2001,25 @@ function paintProgress() {
     return;
   }
   el.genStagePct.classList.remove("warming");
-  if (progress.totalWaves) {
+  if (progress.chunksTotal && progress.chunksDone) {
+    // Streamed chunks are the ground truth — every rendered chunk is a real,
+    // gate-approved fraction of the take.
+    const frac = Math.min(0.985, progress.chunksDone / progress.chunksTotal);
+    el.progressTrack.hidden = false;
+    el.genStageTrack.hidden = false;
+    el.progressTrack.classList.remove("indeterminate");
+    el.genStageTrack.classList.remove("indeterminate");
+    const width = `${Math.max(1.5, frac * 100).toFixed(1)}%`;
+    el.progressFill.style.width = width;
+    el.genStageFill.style.width = width;
+    pctText = `${Math.round(frac * 100)}%`;
+    document.title = `${pctText} · Chorus`;
+    parts.push(`${progress.chunksDone} of ${progress.chunksTotal} chunks`);
+    if (frac > 0.05 && frac < 1) {
+      const eta = formatMinutes(elapsed * (1 - frac) / frac);
+      if (eta) parts.push(`~${eta} left`);
+    }
+  } else if (progress.totalWaves) {
     const done = Math.max(0, progress.wave - 1);
     // Waves land in steps minutes apart, so a bare completed-wave count would
     // sit at 0% through all of wave 1 and then jump. Once a wave has finished
@@ -2084,7 +2108,10 @@ function startProgress() {
   progress.genStartedAt = 0;
   progress.warmupSecs = 0;
   progress.chunks = 0;
+  progress.chunksDone = 0;
+  progress.chunksTotal = 0;
   progress.scriptWords = state.turns.reduce((n, t) => n + (t.text || "").split(/\s+/).filter(Boolean).length, 0);
+  resetPreview();
   el.progressFill.style.width = "0%";
   el.progressTrack.classList.add("indeterminate");
   el.genStageTrack.classList.add("indeterminate");
@@ -2209,6 +2236,186 @@ async function checkLastTake() {
   } catch { /* nothing to recover */ }
 }
 
+/* ---------------- Live preview while rendering ----------------
+   The backend streams each rendered chunk (post quality gate) as a URL.
+   Chunks are decoded and scheduled through Web Audio with the same 0.25 s
+   linear crossfade the server bakes into the final take, so what plays here
+   is what the take will sound like. This is deliberately independent of the
+   main player: when the full take lands, playback hands off to it. */
+const PREVIEW_XF = 0.25;
+const preview = {
+  ctx: null, master: null, total: 0, nextIndex: 0, buffers: new Map(),
+  sources: [], timeline: [], nextCtxTime: 0, nextTakeTime: 0,
+  active: false, muted: false, done: true, normGain: 1,
+};
+
+function resetPreview() {
+  stopPreview(0);
+  preview.total = 0;
+  preview.nextIndex = 0;
+  preview.buffers.clear();
+  preview.timeline = [];
+  preview.nextCtxTime = 0;
+  preview.nextTakeTime = 0;
+  preview.normGain = 1;
+  preview.done = false;
+  el.genPreviewRow.hidden = true;
+}
+
+function stopPreview(fadeSecs = 0.3) {
+  preview.done = true;
+  preview.active = false;
+  if (!preview.ctx) return;
+  const ctx = preview.ctx;
+  preview.ctx = null;
+  try {
+    if (preview.master && fadeSecs > 0) {
+      preview.master.gain.setValueAtTime(preview.master.gain.value, ctx.currentTime);
+      preview.master.gain.linearRampToValueAtTime(0, ctx.currentTime + fadeSecs);
+      setTimeout(() => ctx.close().catch(() => {}), fadeSecs * 1000 + 100);
+    } else {
+      ctx.close().catch(() => {});
+    }
+  } catch { /* already closed */ }
+  preview.master = null;
+  preview.sources = [];
+}
+
+function ensurePreviewCtx() {
+  if (preview.ctx) return true;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return false;
+  try {
+    preview.ctx = new Ctx();
+    preview.master = preview.ctx.createGain();
+    preview.master.connect(preview.ctx.destination);
+    if (preview.ctx.state === "suspended") preview.ctx.resume().catch(() => {});
+    return true;
+  } catch {
+    preview.ctx = null;
+    return false;
+  }
+}
+
+// Match the default Studio sound: measure the first chunk's gated loudness
+// and level the whole preview toward the same target the player uses.
+function previewNormGain(buf) {
+  const data = buf.getChannelData(0);
+  const frame = Math.max(1, Math.round(buf.sampleRate * 0.05));
+  let maxRms = 0;
+  const rmses = [];
+  for (let i = 0; i + frame <= data.length; i += frame) {
+    let sum = 0;
+    for (let j = i; j < i + frame; j += 1) sum += data[j] * data[j];
+    const r = Math.sqrt(sum / frame);
+    rmses.push(r);
+    if (r > maxRms) maxRms = r;
+  }
+  const active = rmses.filter((r) => r > maxRms * 0.2);
+  if (!active.length) return 1;
+  const rms = Math.sqrt(active.reduce((a, r) => a + r * r, 0) / active.length);
+  const db = 20 * Math.log10(Math.max(rms, 1e-6));
+  return Math.min(8, Math.max(0.05, 10 ** ((NORM_TARGET_DB - db) / 20)));
+}
+
+async function handleStreamChunk(evt) {
+  if (preview.done || evt.chunk_index == null || !evt.chunk_url) return;
+  preview.total = evt.chunk_total || preview.total;
+  if (evt.chunk_index < preview.nextIndex || preview.buffers.has(evt.chunk_index)) return;
+  try {
+    const res = await fetch(evt.chunk_url);
+    if (!res.ok || preview.done) return;
+    if (!ensurePreviewCtx()) return;
+    const audioBuf = await preview.ctx.decodeAudioData(await res.arrayBuffer());
+    if (preview.done) return;
+    preview.buffers.set(evt.chunk_index, audioBuf);
+    pumpPreview();
+  } catch { /* preview is best-effort; the full take still arrives */ }
+}
+
+function pumpPreview() {
+  while (!preview.done && preview.buffers.has(preview.nextIndex)) {
+    const buf = preview.buffers.get(preview.nextIndex);
+    preview.buffers.delete(preview.nextIndex);
+    schedulePreviewChunk(buf, preview.nextIndex);
+    preview.nextIndex += 1;
+  }
+  updatePreviewUI();
+}
+
+function schedulePreviewChunk(buf, idx) {
+  const ctx = preview.ctx;
+  const now = ctx.currentTime;
+  if (idx === 0) {
+    const useNorm = (SOUND_MODES[polish.mode] || SOUND_MODES[DEFAULT_SOUND]).norm;
+    preview.normGain = useNorm ? previewNormGain(buf) : 1;
+    preview.master.gain.value = preview.muted ? 0 : preview.normGain;
+  }
+  const gain = ctx.createGain();
+  gain.connect(preview.master);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(gain);
+
+  let start;
+  if (idx === 0) {
+    start = now + 0.15;
+  } else if (preview.nextCtxTime - PREVIEW_XF > now + 0.02) {
+    start = preview.nextCtxTime - PREVIEW_XF; // on time: overlap into the tail fade
+  } else {
+    start = now + 0.05; // arrived after a stall: butt-join with a quick fade-in
+  }
+  const fadeIn = idx === 0 ? 0 : Math.min(PREVIEW_XF, Math.max(0.05, preview.nextCtxTime - start));
+  if (fadeIn > 0) {
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(1, start + fadeIn);
+  }
+  // Fade every tail so the next chunk can crossfade over it (mirrors the
+  // server's linear seam). The very last tail fade is covered by handoff.
+  const end = start + buf.duration;
+  gain.gain.setValueAtTime(1, Math.max(start + fadeIn, end - PREVIEW_XF));
+  gain.gain.linearRampToValueAtTime(0, end);
+  src.start(start);
+  preview.sources.push(src);
+  preview.timeline.push({ ctxStart: start, takeStart: preview.nextTakeTime, dur: buf.duration });
+  preview.nextCtxTime = end;
+  preview.nextTakeTime += buf.duration - PREVIEW_XF;
+  preview.active = true;
+}
+
+// Where preview playback currently sits, in final-take seconds — the timeline
+// mirrors the server concat (each seam shortens by the crossfade).
+function previewPositionSeconds() {
+  if (!preview.ctx || !preview.timeline.length) return 0;
+  const now = preview.ctx.currentTime;
+  let pos = 0;
+  for (const seg of preview.timeline) {
+    if (now >= seg.ctxStart) pos = seg.takeStart + Math.min(now - seg.ctxStart, seg.dur);
+  }
+  return pos;
+}
+
+function updatePreviewUI() {
+  if (preview.done || !preview.active) return;
+  el.genPreviewRow.hidden = false;
+  const n = Math.min(preview.nextIndex, preview.total || preview.nextIndex);
+  if (preview.ctx && preview.ctx.state === "suspended") {
+    // Browser blocked audio start without a fresh gesture.
+    el.genPreviewLabel.textContent = "Preview ready — click Unmute to listen while it renders";
+    return;
+  }
+  el.genPreviewLabel.textContent = preview.total
+    ? `Live preview playing · ${n} of ${preview.total} chunks rendered`
+    : "Live preview playing";
+}
+
+el.genPreviewMute.addEventListener("click", () => {
+  preview.muted = !preview.muted;
+  el.genPreviewMute.textContent = preview.muted ? "Unmute" : "Mute";
+  if (preview.master) preview.master.gain.value = preview.muted ? 0 : preview.normGain;
+  if (preview.ctx && preview.ctx.state === "suspended") preview.ctx.resume().catch(() => {});
+});
+
 /* ---------------- Generate ---------------- */
 // Editing during a render is meaningless — the payload is already submitted —
 // so freeze the workspace controls until it finishes or is stopped.
@@ -2326,6 +2533,13 @@ el.generateBtn.addEventListener("click", async () => {
         const evt = JSON.parse(rawEvent.slice(6));
         const isDone = evt.stage === "complete" || evt.stage === "error";
         if (evt.stage === "generating_audio") markGenerationStarted();
+        if (evt.stage === "chunk_audio") {
+          if (Number.isFinite(evt.chunk_index)) {
+            progress.chunksDone = Math.max(progress.chunksDone, evt.chunk_index + 1);
+            progress.chunksTotal = evt.chunk_total || progress.chunksTotal;
+          }
+          handleStreamChunk(evt); // async on purpose — never block the event stream
+        }
         // Read the real status for progress before parody flavour replaces it.
         noteProgressFromStatus(evt.status);
         const displayLine = isDone ? evt.status : nextParodyLine() || evt.status;
@@ -2372,6 +2586,21 @@ el.generateBtn.addEventListener("click", async () => {
             ? { starts: evt.chunk_starts_sec, counts: evt.chunk_turn_counts, turnStarts: evt.turn_starts_sec }
             : null;
           await presentTake(evt.audio_id, evt.audio_duration, turnsSnapshot, anchors);
+          // Hand playback from the live preview to the real player without
+          // making the listener start over.
+          const handoffPos = previewPositionSeconds();
+          const wasListening = preview.active && !preview.muted;
+          stopPreview(0.35);
+          if (wasListening && handoffPos > 1 && Number.isFinite(evt.audio_duration)) {
+            const audio = el.resultAudio;
+            const target = Math.max(0, Math.min(handoffPos - 0.1, evt.audio_duration - 0.5));
+            const seekPlay = () => {
+              try { audio.currentTime = target; } catch { /* not seekable yet */ }
+              audio.play().catch(() => {});
+            };
+            if (audio.readyState >= 1) seekPlay();
+            else audio.addEventListener("loadedmetadata", seekPlay, { once: true });
+          }
         }
       }
     }
@@ -2384,6 +2613,7 @@ el.generateBtn.addEventListener("click", async () => {
     el.dockEmpty.hidden = false;
     checkLastTake();  // if a finished take survived the failure, offer it
   } finally {
+    stopPreview(0); // no-op after a normal handoff; silences aborts and errors
     stopProgress();
     setWorkspaceEnabled(true);
     generateAbort = null;
