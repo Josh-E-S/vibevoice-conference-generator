@@ -226,6 +226,9 @@ function openLibrary(targetSlot = null) {
 }
 el.browseVoicesBtn.addEventListener("click", () => openLibrary(null));
 el.closeLibraryBtn.addEventListener("click", () => el.voiceLibraryDialog.close());
+// The dialog's close event fires for the X, backdrop clicks, Esc, AND the
+// programmatic closes after choosing a voice — one hook silences them all.
+el.voiceLibraryDialog.addEventListener("close", stopVoicePreview);
 el.voiceLibraryDialog.addEventListener("click", (e) => {
   if (e.target === el.voiceLibraryDialog) el.voiceLibraryDialog.close();
 });
@@ -287,6 +290,13 @@ state.previewAudio.addEventListener("ended", () => {
   state.playingVoice = null;
   refreshPreviewButtons();
 });
+
+function stopVoicePreview() {
+  if (!state.playingVoice) return;
+  state.previewAudio.pause();
+  state.playingVoice = null;
+  refreshPreviewButtons();
+}
 
 /* ---------------- Sidebar: cast / quality / expressiveness ---------------- */
 function updateVoiceConsentVisibility() {

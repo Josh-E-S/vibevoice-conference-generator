@@ -247,6 +247,26 @@ class VibeVoiceModel:
     # speech RMS (~-22 dBFS) before conditioning.
     REF_TARGET_RMS = 0.08
     REF_PEAK_CEILING = 0.95
+    REF_MAX_SECONDS = 60   # refs cost 7.5 prompt tokens/s in EVERY batch row —
+                           # a minutes-long clone bloats VRAM and slows prefill
+
+    @classmethod
+    def _trim_reference(cls, wav: np.ndarray, sr: int) -> np.ndarray:
+        """Cap a reference clip at the REF_MAX_SECONDS window with the most speech."""
+        limit = int(cls.REF_MAX_SECONDS * sr)
+        if len(wav) <= limit:
+            return wav
+        frame = max(1, int(0.05 * sr))
+        n = len(wav) // frame
+        rms = np.sqrt(np.mean(np.square(
+            wav[:n * frame].astype(np.float32).reshape(n, frame)), axis=1))
+        active = (rms > max(0.02, float(rms.max()) * 0.15)).astype(np.float32)
+        win = max(1, limit // frame)
+        if n <= win:
+            return wav[:limit]
+        score = np.convolve(active, np.ones(win), mode="valid")
+        start = int(np.argmax(score)) * frame
+        return wav[start:start + limit]
 
     @classmethod
     def _normalize_reference(cls, wav: np.ndarray, sr: int) -> np.ndarray:
@@ -282,6 +302,7 @@ class VibeVoiceModel:
                 wav = np.mean(wav, axis=1)
             if sr != target_sr:
                 wav = librosa.resample(wav, orig_sr=sr, target_sr=target_sr)
+            wav = self._trim_reference(wav, target_sr)
             return self._normalize_reference(wav, target_sr)
         except Exception as e:
             print(f"Error reading audio {label}: {e}")
