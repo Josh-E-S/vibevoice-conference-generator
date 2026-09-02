@@ -291,11 +291,63 @@ class VibeVoiceModel:
         gain = min(gain, cls.REF_PEAK_CEILING / peak)  # never clip a quiet-but-peaky clip
         return wav * gain
 
+    # Clone-reference noise cleanup. VibeVoice imprints the reference's noise
+    # character on every generated word, so hiss on an uploaded clip becomes
+    # hiss on the whole take. Mild STFT spectral gating (noise print = per-bin
+    # 10th-percentile magnitude; attenuation capped; gains smoothed) cleans the
+    # bed without touching speech — a clean clip passes through essentially
+    # unchanged. Applied to uploaded clones only: presets were curated and
+    # ear-validated as-is, and reprocessing them would silently change takes.
+    REF_DENOISE_FLOOR_DB = -14.0
+    REF_DENOISE_OVERSUB = 1.6
+    REF_DENOISE_HIGHPASS_HZ = 70.0
+
+    @classmethod
+    def _denoise_reference(cls, x: np.ndarray, sr: int) -> np.ndarray:
+        try:
+            n_fft = 1024
+            hop = n_fft // 4
+            if len(x) < n_fft * 4:
+                return x
+            pad = n_fft
+            xp = np.pad(x.astype(np.float32), pad, mode="reflect")
+            win = np.hanning(n_fft).astype(np.float32)
+            n_frames = 1 + (len(xp) - n_fft) // hop
+            idx = np.arange(n_fft)[None, :] + hop * np.arange(n_frames)[:, None]
+            spec = np.fft.rfft(xp[idx] * win, axis=1)
+            mag = np.abs(spec)
+            noise = np.percentile(mag, 10, axis=0) * cls.REF_DENOISE_OVERSUB
+            floor = 10 ** (cls.REF_DENOISE_FLOOR_DB / 20)
+            gain = np.clip(1.0 - noise[None, :] / np.maximum(mag, 1e-9), floor, 1.0)
+            lowcut = int(cls.REF_DENOISE_HIGHPASS_HZ * n_fft / sr) + 1
+            gain[:, :lowcut] = floor  # rumble below the speech band
+            # Smooth over time then frequency — kills "musical noise" shimmer.
+            gain = (gain + np.roll(gain, 1, axis=0) + np.roll(gain, -1, axis=0)) / 3.0
+            gain = (gain + np.roll(gain, 1, axis=1) + np.roll(gain, -1, axis=1)) / 3.0
+            frames_out = np.fft.irfft(spec * gain, n=n_fft, axis=1).astype(np.float32) * win
+            # Weighted overlap-add: frames i and i+4 sit exactly n_fft apart,
+            # so each hop phase concatenates contiguously — no per-frame loop.
+            out = np.zeros(len(xp) + n_fft, dtype=np.float32)
+            wsum = np.zeros(len(xp) + n_fft, dtype=np.float32)
+            w2 = win * win
+            for r in range(n_fft // hop):
+                sub = frames_out[r::n_fft // hop]
+                if len(sub):
+                    s = r * hop
+                    out[s:s + sub.size] += sub.ravel()
+                    wsum[s:s + sub.size] += np.tile(w2, len(sub))
+            out = out[:len(xp)] / np.maximum(wsum[:len(xp)], 1e-6)
+            return out[pad:pad + len(x)]
+        except Exception as e:  # fail open — a denoise bug must never block a render
+            print(f"Reference denoise failed (using clip as-is): {e}")
+            return x
+
     def read_audio(self, audio_source, target_sr: int = 24000) -> np.ndarray:
         """audio_source is a file path (preset) or raw audio bytes (user-uploaded clone)."""
         try:
-            label = "uploaded clone" if isinstance(audio_source, (bytes, bytearray)) else audio_source
-            if isinstance(audio_source, (bytes, bytearray)):
+            is_clone = isinstance(audio_source, (bytes, bytearray))
+            label = "uploaded clone" if is_clone else audio_source
+            if is_clone:
                 audio_source = io.BytesIO(audio_source)
             wav, sr = sf.read(audio_source)
             if len(wav.shape) > 1:
@@ -303,6 +355,8 @@ class VibeVoiceModel:
             if sr != target_sr:
                 wav = librosa.resample(wav, orig_sr=sr, target_sr=target_sr)
             wav = self._trim_reference(wav, target_sr)
+            if is_clone:
+                wav = self._denoise_reference(wav, target_sr)
             return self._normalize_reference(wav, target_sr)
         except Exception as e:
             print(f"Error reading audio {label}: {e}")

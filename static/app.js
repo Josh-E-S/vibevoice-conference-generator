@@ -83,7 +83,7 @@ const el = {};
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
   "playerStage", "stageTitle", "stagePlayBtn", "stageWaveform", "stageTime",
   "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn", "stageOrbs",
-  "stageScriptToggle", "stageTranscript", "soundSeg", "soundHint", "polishStatus",
+  "stageScriptToggle", "stageTranscript", "soundSeg", "soundHint", "polishStatus", "cleanNoiseCheckbox",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
   "realtimeRow", "realtimeFactor", "warmupRow", "warmupTime",
   "downloadMp3Btn", "stageDownloadMp3Btn",
@@ -1581,7 +1581,7 @@ const TONE_CURVES = {
   bright: { low: -2, high: 4.5 },
 };
 
-const polish = { ctx: null, low: null, high: null, gain: null, limiter: null, analyser: null, mode: DEFAULT_SOUND, audioId: null };
+const polish = { ctx: null, low: null, high: null, gain: null, limiter: null, analyser: null, mode: DEFAULT_SOUND, audioId: null, denoise: false };
 
 const NORM_TARGET_DB = -16; // keep in sync with the server's NORM_TARGET_DB
 
@@ -1641,7 +1641,11 @@ function applySound() {
   el.soundSeg.querySelectorAll("button").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.sound === polish.mode);
   });
-  el.soundHint.textContent = `${mode.hint} · downloads match what you hear`;
+  // Spectral denoising has no live Web Audio equivalent, so it is applied
+  // only when the server renders the download.
+  el.soundHint.textContent = polish.denoise
+    ? `${mode.hint} · noise cleanup is baked into downloads (not the live preview)`
+    : `${mode.hint} · downloads match what you hear`;
 
   updateExportLinks();
 
@@ -1658,8 +1662,8 @@ function updateExportLinks() {
   if (!polish.audioId) return;
   const plain = `/api/audio/${polish.audioId}`;
   const mode = SOUND_MODES[polish.mode] || SOUND_MODES[DEFAULT_SOUND];
-  const isOriginal = polish.mode === "original";
-  const query = `speed=1&tone=${mode.tone}&level=false&norm=${mode.norm}`;
+  const isOriginal = polish.mode === "original" && !polish.denoise;
+  const query = `speed=1&tone=${mode.tone}&level=false&norm=${mode.norm}&denoise=${polish.denoise}`;
   el.downloadBtn.href = isOriginal ? plain : `${plain}/export?${query}&fmt=wav`;
   el.stageDownloadBtn.href = el.downloadBtn.href;
   el.downloadMp3Btn.href = isOriginal ? `${plain}.mp3` : `${plain}/export?${query}&fmt=mp3`;
@@ -1712,7 +1716,7 @@ function showTakeGone() {
       showTakeGone();
       return;
     }
-    if (kind === "MP3" || polish.mode !== "original") noteExportStarted(kind);
+    if (kind === "MP3" || polish.mode !== "original" || polish.denoise) noteExportStarted(kind);
     anchor.dataset.verified = "1";
     anchor.click();
   });
@@ -1730,6 +1734,10 @@ el.soundSeg.querySelectorAll("button").forEach((btn) => {
     if (polish.ctx && polish.ctx.state === "suspended") polish.ctx.resume();
     applySound();
   });
+});
+el.cleanNoiseCheckbox.addEventListener("change", () => {
+  polish.denoise = el.cleanNoiseCheckbox.checked;
+  applySound();  // refreshes the hint and the export links
 });
 // A suspended context would silence the element now that audio routes through it.
 el.resultAudio.addEventListener("play", () => {

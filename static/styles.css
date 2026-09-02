@@ -1040,6 +1040,17 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   color: var(--ink-faint);
 }
 .sound-seg { margin-bottom: 0; }
+.sound-clean {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sound-clean input { accent-color: var(--ink); cursor: pointer; }
 .sound-hint {
   margin-top: 9px;
   text-align: center;

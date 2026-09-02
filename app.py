@@ -1036,7 +1036,58 @@ def _gated_loudness_db(frame_rms: np.ndarray) -> float | None:
     return 20 * np.log10(max(gated, 1e-9))
 
 
-def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool, norm: bool = False) -> bytes:
+# Noise cleanup: STFT spectral gating. The noise print is the per-bin 10th
+# percentile of magnitude over time — a stationary-floor estimate that speech
+# (sparse in any one bin) barely lifts. Bins are attenuated at most down to
+# DENOISE_FLOOR_DB and gains are smoothed over time and frequency, so clean
+# audio passes through nearly untouched and gating artifacts ("musical noise")
+# stay below audibility. Model-generated babble/static bursts are NOT
+# stationary noise — the render-time quality gate handles those — this targets
+# hiss, rumble, and the low static bed between words.
+DENOISE_FLOOR_DB = -14.0     # max attenuation of noise-dominated bins
+DENOISE_OVERSUB = 1.6        # over-subtraction margin on the noise print
+DENOISE_HIGHPASS_HZ = 70.0   # speech fundamentals live above this
+
+
+def _spectral_denoise(x: np.ndarray, sample_rate: int) -> np.ndarray:
+    n_fft = 1024
+    hop = n_fft // 4
+    if len(x) < n_fft * 4:
+        return x
+    pad = n_fft
+    xp = np.pad(x.astype(np.float32), pad, mode="reflect")
+    win = np.hanning(n_fft).astype(np.float32)
+    n_frames = 1 + (len(xp) - n_fft) // hop
+    idx = np.arange(n_fft)[None, :] + hop * np.arange(n_frames)[:, None]
+    spec = np.fft.rfft(xp[idx] * win, axis=1)
+    mag = np.abs(spec)
+    noise = np.percentile(mag, 10, axis=0) * DENOISE_OVERSUB
+    floor = 10 ** (DENOISE_FLOOR_DB / 20)
+    gain = np.clip(1.0 - noise[None, :] / np.maximum(mag, 1e-9), floor, 1.0)
+    lowcut = int(DENOISE_HIGHPASS_HZ * n_fft / sample_rate) + 1
+    gain[:, :lowcut] = floor  # rumble below the speech band always gets the full cut
+    # Smooth over time then frequency: isolated single-bin gain flips are
+    # exactly what produces the watery shimmer.
+    gain = (gain + np.roll(gain, 1, axis=0) + np.roll(gain, -1, axis=0)) / 3.0
+    gain = (gain + np.roll(gain, 1, axis=1) + np.roll(gain, -1, axis=1)) / 3.0
+    frames_out = np.fft.irfft(spec * gain, n=n_fft, axis=1).astype(np.float32) * win
+    # Weighted overlap-add. Frames i and i+4 are exactly n_fft apart, so each
+    # of the 4 hop phases concatenates contiguously — no per-frame loop.
+    out = np.zeros(len(xp) + n_fft, dtype=np.float32)
+    wsum = np.zeros(len(xp) + n_fft, dtype=np.float32)
+    w2 = win * win
+    for r in range(n_fft // hop):
+        sub = frames_out[r::n_fft // hop]
+        if len(sub):
+            s = r * hop
+            out[s:s + sub.size] += sub.ravel()
+            wsum[s:s + sub.size] += np.tile(w2, len(sub))
+    out = out[:len(xp)] / np.maximum(wsum[:len(xp)], 1e-6)
+    return out[pad:pad + len(x)]
+
+
+def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool, norm: bool = False,
+                denoise: bool = False) -> bytes:
     """Apply the polish settings to a stored take and return a new WAV.
 
     Processed in blocks so a five-hour render doesn't need gigabytes at once.
@@ -1068,6 +1119,8 @@ def _polish_wav(wav_bytes: bytes, speed: float, tone: str, level: bool, norm: bo
     sq_n = 0
     for start in range(0, len(samples), block):
         chunk = samples[start:start + block].astype(np.float32) / 32768.0
+        if denoise:
+            chunk = _spectral_denoise(chunk, sample_rate)
         if sos is not None:
             chunk, zi = sosfilt(sos, chunk, zi=zi)
             chunk = chunk.astype(np.float32)
@@ -1161,7 +1214,7 @@ async def api_audio_mp3(audio_id: str) -> Response:
     )
 
 
-POLISH_CACHE: dict[tuple, bytes] = {}   # (audio_id, speed, tone, level, norm, fmt) -> bytes
+POLISH_CACHE: dict[tuple, bytes] = {}   # (audio_id, speed, tone, level, norm, denoise, fmt) -> bytes
 
 
 @app.get("/api/audio/{audio_id}/export")
@@ -1171,6 +1224,7 @@ async def api_audio_export(
     tone: str = "neutral",
     level: bool = False,
     norm: bool = False,
+    denoise: bool = False,
     fmt: str = "wav",
 ) -> Response:
     """Download the take with the polish settings baked in."""
@@ -1180,12 +1234,12 @@ async def api_audio_export(
     speed = round(min(1.25, max(0.8, speed)), 2)
     tone = tone if tone in TONE_SHELVES else "neutral"
     fmt = "mp3" if fmt == "mp3" else "wav"
-    key = (audio_id, speed, tone, bool(level), bool(norm), fmt)
+    key = (audio_id, speed, tone, bool(level), bool(norm), bool(denoise), fmt)
     if key not in POLISH_CACHE:
         _, wav_bytes = entry
         loop = asyncio.get_event_loop()
         processed = await loop.run_in_executor(
-            None, _polish_wav, wav_bytes, speed, tone, bool(level), bool(norm)
+            None, _polish_wav, wav_bytes, speed, tone, bool(level), bool(norm), bool(denoise)
         )
         if fmt == "mp3":
             processed = await loop.run_in_executor(None, _encode_mp3, processed)
