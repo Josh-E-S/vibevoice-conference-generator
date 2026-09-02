@@ -249,24 +249,56 @@ class VibeVoiceModel:
     REF_PEAK_CEILING = 0.95
     REF_MAX_SECONDS = 60   # refs cost 7.5 prompt tokens/s in EVERY batch row —
                            # a minutes-long clone bloats VRAM and slows prefill
+    REF_MAX_SECONDS_CLONE = 30  # uploads only: halves the prompt-leakage material
+                                # and saves ~225 prompt tokens per speaker per row;
+                                # presets keep 60 s (curated, ear-validated as-is)
+    REF_SNAP_SECONDS = 8.0  # how far inside the window an edge may move to land
+                            # on a pause instead of cutting mid-word; a snapped
+                            # edge only ever SHORTENS the clip, which is cheap
 
     @classmethod
-    def _trim_reference(cls, wav: np.ndarray, sr: int) -> np.ndarray:
-        """Cap a reference clip at the REF_MAX_SECONDS window with the most speech."""
-        limit = int(cls.REF_MAX_SECONDS * sr)
+    def _trim_reference(cls, wav: np.ndarray, sr: int, max_seconds: float = None) -> np.ndarray:
+        """Cap a reference clip at the max_seconds window with the most speech.
+
+        Window edges snap to the quietest moment within REF_SNAP_SECONDS so the
+        clip starts at an utterance boundary and — more importantly — does not
+        END mid-word: an acoustic prompt cut mid-utterance invites the model to
+        'finish' it, heard as the reference being re-spoken at the top of the
+        take (prompt leakage, observed 2026-09-02).
+        """
+        limit = int((max_seconds or cls.REF_MAX_SECONDS) * sr)
         if len(wav) <= limit:
             return wav
         frame = max(1, int(0.05 * sr))
         n = len(wav) // frame
         rms = np.sqrt(np.mean(np.square(
             wav[:n * frame].astype(np.float32).reshape(n, frame)), axis=1))
-        active = (rms > max(0.02, float(rms.max()) * 0.15)).astype(np.float32)
+        thresh = max(0.02, float(rms.max()) * 0.15)
+        active = (rms > thresh).astype(np.float32)
         win = max(1, limit // frame)
         if n <= win:
-            return wav[:limit]
-        score = np.convolve(active, np.ones(win), mode="valid")
-        start = int(np.argmax(score)) * frame
-        return wav[start:start + limit]
+            start_f, end_f = 0, min(n, win)
+        else:
+            score = np.convolve(active, np.ones(win), mode="valid")
+            start_f = int(np.argmax(score))
+            end_f = start_f + win
+        snap = max(1, int(cls.REF_SNAP_SECONDS * sr / frame))
+
+        def quietest(lo, hi):
+            lo, hi = max(0, lo), min(n, hi)
+            if hi <= lo:
+                return None
+            j = lo + int(np.argmin(rms[lo:hi]))
+            return j if rms[j] <= thresh else None  # no real pause in range
+
+        j = quietest(end_f - snap, end_f)   # end moves EARLIER only (stays <= limit)
+        if j is not None:
+            end_f = min(j + 3, end_f)       # keep ~150 ms of the pause so the
+                                            # final word's decay is never clipped
+        j = quietest(start_f, start_f + snap)
+        if j is not None and j + 1 < end_f:
+            start_f = j + 1                 # begin right after the pause
+        return wav[start_f * frame:max(end_f, start_f + 1) * frame]
 
     @classmethod
     def _normalize_reference(cls, wav: np.ndarray, sr: int) -> np.ndarray:
@@ -354,7 +386,9 @@ class VibeVoiceModel:
                 wav = np.mean(wav, axis=1)
             if sr != target_sr:
                 wav = librosa.resample(wav, orig_sr=sr, target_sr=target_sr)
-            wav = self._trim_reference(wav, target_sr)
+            wav = self._trim_reference(
+                wav, target_sr,
+                self.REF_MAX_SECONDS_CLONE if is_clone else None)
             if is_clone:
                 wav = self._denoise_reference(wav, target_sr)
             return self._normalize_reference(wav, target_sr)
@@ -647,6 +681,13 @@ class VibeVoiceModel:
     GATE_WPS_MAX = 4.2            # faster = audio truncated/skipped words
     GATE_SILENCE_MAX = 0.5        # >50% near-silent frames
     GATE_FLATNESS_MAX = 0.5       # white noise ≈ 1.0, speech ≪ 0.5
+    # Prompt-leakage (reference replay) detector: a replayed reference clip adds
+    # real, healthy-sounding speech that is not in the script, so on a big chunk
+    # the wps floor never trips (200 words + a 30 s replay ≈ 1.7 wps). What does
+    # give it away is ABSOLUTE overshoot: more seconds of audio than the word
+    # count can explain at a slow-but-plausible rate, beyond pause slack.
+    GATE_REPLAY_WPS = 2.0         # healthy renders measure ~2.2-2.5 wps
+    GATE_REPLAY_SLACK_S = 10.0    # inter-turn pauses, breaths, chunk tails
 
     @classmethod
     def _chunk_quality(cls, chunk_text: str, audio, sample_rate: int):
@@ -684,6 +725,10 @@ class VibeVoiceModel:
             if wps < cls.GATE_WPS_MIN or wps > cls.GATE_WPS_MAX:
                 badness += abs(wps - np.clip(wps, cls.GATE_WPS_MIN, cls.GATE_WPS_MAX))
                 reasons.append(f"rate {wps:.2f} wps")
+            overshoot = dur - words / cls.GATE_REPLAY_WPS - cls.GATE_REPLAY_SLACK_S
+            if overshoot > 0:
+                badness += overshoot / 10.0
+                reasons.append(f"overlong {dur:.0f}s for {words} words (reference replay?)")
             if silence_frac > cls.GATE_SILENCE_MAX:
                 badness += silence_frac - cls.GATE_SILENCE_MAX
                 reasons.append(f"silence {silence_frac:.2f}")
