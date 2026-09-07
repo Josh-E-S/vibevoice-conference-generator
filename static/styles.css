@@ -613,6 +613,12 @@ select:focus { outline: none; border-color: #d9a98c; }
   gap: 12px;
 }
 .generate-bar-meta { font-size: 0.8rem; font-weight: 600; color: var(--ink-dim); }
+.cold-note {
+  margin: 10px 20px 0;
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+  text-align: right;
+}
 
 /* ---------------- Output dock ---------------- */
 .dock-label { margin-bottom: 16px; }

@@ -67,7 +67,7 @@ const state = {
 
 const el = {};
 [
-  "runtimeStatus", "runtimeLabel", "browseVoicesBtn", "aboutBtn", "aboutDialog", "closeAboutBtn",
+  "runtimeStatus", "runtimeLabel", "coldNote", "browseVoicesBtn", "aboutBtn", "aboutDialog", "closeAboutBtn",
   "speakerStepper", "voiceRows", "qualityPills", "cfgScale", "cfgScaleValue",
   "voiceConsentRow", "voiceConsentCheckbox",
   "scriptPrompt", "durationSelect", "generateScriptBtn", "examplePills", "openImportBtn", "scriptGenStatus",
@@ -240,10 +240,19 @@ async function updateStatus() {
     const payload = await res.json();
     const ready = payload.backend === "ready";
     el.runtimeStatus.classList.toggle("ready", ready);
-    el.runtimeLabel.textContent = ready ? "Model ready" : "Backend offline";
+    // "warm" is reported only when Modal exposes live container counts. Known
+    // cold → warn; unknown → warn (safer to over-promise a wait than a fast
+    // start); known warm → say so and hide the note.
+    const warm = typeof payload.warm === "boolean" ? payload.warm : null;
+    if (!ready) el.runtimeLabel.textContent = "Backend offline";
+    else if (warm === true) el.runtimeLabel.textContent = "GPU warm";
+    else if (warm === false) el.runtimeLabel.textContent = "GPU idle";
+    else el.runtimeLabel.textContent = "Model ready";
+    el.coldNote.hidden = !ready || warm === true;
   } catch {
     el.runtimeStatus.classList.remove("ready");
     el.runtimeLabel.textContent = "Connecting";
+    el.coldNote.hidden = true;
   }
 }
 

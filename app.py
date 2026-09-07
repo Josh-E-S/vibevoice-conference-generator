@@ -601,7 +601,8 @@ def _prune_audio_store() -> None:
 _RATE_LOG: dict[str, deque] = defaultdict(deque)
 SCRIPT_RATE_LIMIT = (5, 600)      # 5 script generations per 10 min per IP (hits paid HF inference)
 AUDIO_RATE_LIMIT = (3, 3600)      # 3 audio generations per hour per IP (hits paid Modal GPU time)
-GENERATION_CONCURRENCY = asyncio.Semaphore(2)  # at most 2 Modal generations in flight at once, globally
+GENERATION_CONCURRENCY = asyncio.Semaphore(4)  # at most 4 Modal generations in flight at once, globally —
+                                               # matches the backend's max_containers cap (2026-09-06)
 
 
 def _client_ip(request: Request) -> str:
@@ -682,9 +683,45 @@ async def index() -> Response:
     )
 
 
+BACKEND_STATS_TTL = 10.0  # seconds; the UI polls every 8 s, so one Modal call per poll at most
+_backend_stats_cache: dict = {"at": 0.0, "value": None}
+
+
+def _backend_stats_sync() -> dict | None:
+    """Live runner counts from Modal, or None when unavailable (old SDK, network)."""
+    if remote_generate_function is None:
+        return None
+    try:
+        stats = remote_generate_function.get_current_stats()
+        return {
+            "warm_containers": int(stats.num_total_runners),
+            "running": int(stats.num_running_inputs),
+            "backlog": int(stats.backlog),
+        }
+    except Exception as e:
+        print(f"Backend stats unavailable (non-fatal): {e}")
+        return None
+
+
+async def _backend_stats() -> dict | None:
+    now = time.time()
+    if now - _backend_stats_cache["at"] < BACKEND_STATS_TTL:
+        return _backend_stats_cache["value"]
+    value = await asyncio.to_thread(_backend_stats_sync)
+    _backend_stats_cache.update(at=time.time(), value=value)
+    return value
+
+
 @app.get("/api/status")
 async def api_status() -> dict:
-    return {"backend": "ready" if remote_generate_function is not None else "offline"}
+    """Backend reachability plus, when Modal reports it, whether a GPU container
+    is already hot — the UI uses that to warn about the ~3 min cold path."""
+    payload = {"backend": "ready" if remote_generate_function is not None else "offline"}
+    stats = await _backend_stats()
+    if stats is not None:
+        payload.update(stats)
+        payload["warm"] = stats["warm_containers"] > 0
+    return payload
 
 
 @app.get("/api/models")
