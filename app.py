@@ -58,13 +58,13 @@ DEFAULT_SPEAKERS = ["Cylinder", "Statesman", "Novella", "Eyre"]
 
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 WORDS_PER_MINUTE = 150             # Matches the pace assumed by the client's duration estimate
-DURATION_OPTIONS_MINUTES = [1, 2, 5, 10, 15, 20, 30, 45, 60]
+DURATION_OPTIONS_MINUTES = [1, 2, 5, 10, 15, 20, 30, 45]  # 45 × 150 wpm fits MAX_SCRIPT_WORDS
 MAX_COMPLETION_TOKENS = 8192       # Good-faith ceiling for a single chat_completion call; the
                                     # underlying provider may cap lower, in which case the longest
                                     # duration options may come back shorter than requested
-MAX_SCRIPT_WORDS = 100000         # Effectively uncapped (2026-08-14, Josh) — backend chunking has no
-                                   # real ceiling; the old 20,000 cap was a leftover UI guess that
-                                   # blocked genuine long-form renders below the backend's actual limit
+MAX_SCRIPT_WORDS = 7000           # Public cap (2026-09-07, launch): ~45 min of audio, ~8 min of A100
+                                   # time per job. The backend itself has no ceiling — record-length
+                                   # renders call Modal directly and bypass this guard.
 MAX_TURNS = 250                    # Hard ceiling regardless of target length (safety valve)
 MAX_GEN_ROUNDS = 24                # Hard cap on LLM calls per script regardless of target length
 MIN_TARGET_FRACTION = 0.9          # Stop extending once the script reaches 90% of the word target
@@ -601,6 +601,9 @@ def _prune_audio_store() -> None:
 _RATE_LOG: dict[str, deque] = defaultdict(deque)
 SCRIPT_RATE_LIMIT = (5, 600)      # 5 script generations per 10 min per IP (hits paid HF inference)
 AUDIO_RATE_LIMIT = (3, 3600)      # 3 audio generations per hour per IP (hits paid Modal GPU time)
+AUDIO_DAILY_BUDGET = (60, 86400)  # 60 audio generations per rolling day across ALL visitors — bounds the
+                                   # worst-case GPU bill regardless of how many IPs show up (2026-09-07)
+GLOBAL_KEY = "__global__"
 GENERATION_CONCURRENCY = asyncio.Semaphore(4)  # at most 4 Modal generations in flight at once, globally —
                                                # matches the backend's max_containers cap (2026-09-06)
 
@@ -612,20 +615,29 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _enforce_rate_limit(bucket: str, request: Request, limit: int, window_seconds: int) -> None:
-    key = f"{bucket}:{_client_ip(request)}"
+def _enforce_rate_limit(bucket: str, request: Request | None, limit: int, window_seconds: int,
+                        message: str | None = None) -> None:
+    """Sliding-window counter. request=None counts globally (every visitor shares the bucket)."""
+    who = _client_ip(request) if request is not None else GLOBAL_KEY
+    key = f"{bucket}:{who}"
     now = time.time()
     log = _RATE_LOG[key]
     while log and now - log[0] > window_seconds:
         log.popleft()
     if len(log) >= limit:
         retry_after = max(1, int(window_seconds - (now - log[0])))
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit reached ({limit} per {window_seconds // 60} min). Try again in about {retry_after}s.",
-            headers={"Retry-After": str(retry_after)},
-        )
+        if message is None:
+            message = f"Rate limit reached ({limit} per {window_seconds // 60} min). Try again in about {retry_after}s."
+        raise HTTPException(status_code=429, detail=message, headers={"Retry-After": str(retry_after)})
     log.append(now)
+
+
+def _audio_budget_remaining() -> int:
+    now = time.time()
+    log = _RATE_LOG[f"audio-day:{GLOBAL_KEY}"]
+    while log and now - log[0] > AUDIO_DAILY_BUDGET[1]:
+        log.popleft()
+    return max(0, AUDIO_DAILY_BUDGET[0] - len(log))
 
 
 # ========================================================
@@ -716,7 +728,11 @@ async def _backend_stats() -> dict | None:
 async def api_status() -> dict:
     """Backend reachability plus, when Modal reports it, whether a GPU container
     is already hot — the UI uses that to warn about the ~3 min cold path."""
-    payload = {"backend": "ready" if remote_generate_function is not None else "offline"}
+    payload = {
+        "backend": "ready" if remote_generate_function is not None else "offline",
+        "daily_remaining": _audio_budget_remaining(),
+        "max_script_words": MAX_SCRIPT_WORDS,
+    }
     stats = await _backend_stats()
     if stats is not None:
         payload.update(stats)
@@ -856,6 +872,10 @@ class GenerateRequest(BaseModel):
 @app.post("/api/generate")
 async def api_generate(payload: GenerateRequest, request: Request) -> StreamingResponse:
     _enforce_rate_limit("audio", request, *AUDIO_RATE_LIMIT)
+    _enforce_rate_limit(
+        "audio-day", None, *AUDIO_DAILY_BUDGET,
+        message="Today's free demo quota is used up. It refills over the next 24 hours — please come back later.",
+    )
     if remote_generate_function is None:
         raise HTTPException(status_code=503, detail="Modal backend is offline.")
 

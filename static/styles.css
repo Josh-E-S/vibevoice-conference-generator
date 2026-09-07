@@ -980,7 +980,11 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   border-radius: 50%;
   background: var(--accent);
   animation: pulse 1.2s ease-in-out infinite;
+  flex: none;
 }
+/* Before the first chunk lands: a quiet note, not a "playing" claim. */
+.gen-preview.waiting { font-weight: 500; flex-wrap: wrap; text-align: center; max-width: 440px; margin-left: auto; margin-right: auto; }
+.gen-preview.waiting .gen-preview-dot { animation: none; background: var(--border-strong); }
 .gen-preview-mute {
   border: 1px solid var(--border);
   background: transparent;
@@ -1077,8 +1081,6 @@ body.is-generating .canvas { opacity: 0.6; transition: opacity 0.2s; }
   text-align: center;
 }
 
-.stage-transcript { margin: 20px 0 0; max-height: 260px; }
-.stage-transcript .sync-text { font-size: 0.88rem; }
 
 .icon-btn {
   width: 30px; height: 30px;

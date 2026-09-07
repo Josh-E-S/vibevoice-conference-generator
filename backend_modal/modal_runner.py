@@ -14,6 +14,23 @@ import pickle
 # Modal-specific imports
 import modal
 
+# --- Scaling profiles (2026-09-06) ---------------------------------------
+# Chosen at deploy time:  VIBEVOICE_PROFILE=launch modal deploy backend_modal/modal_runner.py
+# "launch": one container always hot + one pre-warmed buffer under load, so a
+#           public-post burst lands warm instead of paying the ~3 min model load.
+# "tail":   scale to zero when idle (default). Same cap and idle window, so the
+#           only thing that changes is the standing spend.
+# max_containers is the spending cap in both: a 5th concurrent request queues
+# rather than spawning a 5th A100.
+SCALING_PROFILES = {
+    "launch": dict(min_containers=1, buffer_containers=1, max_containers=4, scaledown_window=1200),
+    "tail":   dict(min_containers=0, buffer_containers=0, max_containers=4, scaledown_window=1200),
+}
+SCALING_PROFILE = os.environ.get("VIBEVOICE_PROFILE", "tail").strip().lower()
+if SCALING_PROFILE not in SCALING_PROFILES:
+    raise SystemExit(f"VIBEVOICE_PROFILE must be one of {sorted(SCALING_PROFILES)}, got {SCALING_PROFILE!r}")
+print(f"Deploying with scaling profile '{SCALING_PROFILE}': {SCALING_PROFILES[SCALING_PROFILE]}")
+
 # Define the Modal Stub
 image = (
     modal.Image.debian_slim(python_version="3.10")
@@ -40,6 +57,7 @@ image = (
         "ln -s /root/schedule /root/vibevoice/schedule"
     )
     .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})  # fights fragmentation across waves
+    .env({"VIBEVOICE_PROFILE": SCALING_PROFILE})  # so container logs name the profile they run under
     .add_local_dir("backend_modal/modular", remote_path="/root/modular")
     .add_local_dir("backend_modal/processor", remote_path="/root/processor")
     .add_local_dir("backend_modal/voices", remote_path="/root/voices")
@@ -65,12 +83,12 @@ cache_volume = modal.Volume.from_name("vibevoice-cache", create_if_missing=True)
 
 @app.cls(
     gpu="A100-40GB",
-    scaledown_window=300,
     timeout=7200,  # was 3600: a 120-min+ record attempt hit the 1h ceiling at the
                    # finish line (2026-08-19), losing the whole render. Long-form
                    # with cloned voices runs slower than the preset-voice record
                    # pace (bigger reference prefill per chunk), so give 2h.
-    volumes={"/cache": cache_volume}
+    volumes={"/cache": cache_volume},
+    **SCALING_PROFILES[SCALING_PROFILE],
 )
 class VibeVoiceModel:
     @modal.enter()
@@ -89,7 +107,9 @@ class VibeVoiceModel:
         from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
         from processor.vibevoice_processor import VibeVoiceProcessor
 
-        print("Entering container and loading models to GPU...")
+        self.boot_started = time.time()
+        print(f"CONTAINER_START profile={SCALING_PROFILE} at={datetime.utcnow().isoformat()}Z "
+              "— loading models to GPU...")
         
         # Set compiler flags for better performance
         if torch.cuda.is_available() and hasattr(torch, '_inductor'):
@@ -122,6 +142,8 @@ class VibeVoiceModel:
 
         self.setup_voice_presets()
         self.ready_at = time.time()  # for cold-start detection in timing reports
+        self.jobs_served = 0
+        print(f"CONTAINER_READY load_seconds={self.ready_at - self.boot_started:.0f}")
         # VRAM baseline right after model load: requests arriving to a GPU far
         # above this are hitting a poisoned container (e.g. a cancelled run's
         # zombie generation thread) and must recycle, not proceed (2026-08-14)
@@ -816,6 +838,11 @@ class VibeVoiceModel:
         falls back to the named preset in speaker_N.
         """
         try:
+            self.jobs_served = getattr(self, "jobs_served", 0) + 1
+            container_age = time.time() - getattr(self, "ready_at", time.time())
+            print(f"JOB_START cold={container_age < 120} container_age_s={container_age:.0f} "
+                  f"job_n={self.jobs_served} model={model_name} words={len(script.split())} "
+                  f"at={datetime.utcnow().isoformat()}Z")
             if model_name not in self.models:
                 raise ValueError(f"Unknown model: {model_name}")
 

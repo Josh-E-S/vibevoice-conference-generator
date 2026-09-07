@@ -30,7 +30,7 @@ _A 3-speaker example — Wizard, Orc, and Mom — generated from a single senten
 
 **Writing**
 - **Prompt-to-script** — describe the scenario ("a 4-person product meeting about pricing") and Qwen2.5-Coder-32B writes the full conversation, with a title
-- **Target length** — pick 1 to 60 minutes; the script is extended in continuation rounds until it reaches the word budget
+- **Target length** — pick 1 to 45 minutes; the script is extended in continuation rounds until it reaches the word budget
 - **Bring your own script** — paste or upload text using `Speaker N:` tags or named characters
 - **Turn editor** — reassign speakers or rewrite any line before rendering
 - **Gender-aware casting** — characters get a matching voice automatically, with one-click override
@@ -86,9 +86,9 @@ The lightweight FastAPI frontend (this repo, hosted as a Docker Space) is separa
 ```
 
 - **Frontend** (`app.py` + `static/`): script generation via the HF Inference API, script parsing, an SSE endpoint that relays progress and streamed chunk audio from Modal, post-processing (tone shelves, loudness normalization, spectral denoise, time-stretch), MP3 encoding, and byte-range serving of finished takes. Takes live in memory for 15 minutes.
-- **Backend** (`backend_modal/modal_runner.py`, gitignored): a Modal class that loads both models at container start and exposes `generate_podcast` as a streaming generator. Deployed separately.
+- **Backend** (`backend_modal/modal_runner.py`): a Modal class that loads both models at container start and exposes `generate_podcast` as a streaming generator. Deployed separately. The VibeVoice model code and reference voice WAVs alongside it are gitignored.
 - **Scaling profiles**: the backend deploys with `VIBEVOICE_PROFILE=launch` (one container always warm, one buffer under load) or `tail` (scale to zero). Both cap at 4 concurrent GPUs; extra requests queue. The first generation after idle in `tail` mode takes ~3 minutes to load models, and the UI says so when the GPU is cold.
-- **Limits**: 3 generations per hour per IP, 4 in flight globally.
+- **Limits** (public demo): scripts up to 7,000 words (~45 min), 3 generations per hour per IP, 60 per day across all visitors, 4 in flight globally. The backend has no length ceiling; the multi-hour records were rendered by calling it directly.
 
 ---
 
@@ -127,7 +127,7 @@ VibeVoice is Microsoft's open-source long-form, multi-speaker TTS model. It uses
 | Janus | M | Bright, Conversational | Original preset |
 | Starchild | F | Airy, Dreamy | Original preset |
 
-Preview clips live in `public/voices/`; the 60-second reference WAVs the backend conditions on are under the gitignored `backend_modal/voices/`.
+Preview clips live in `public/voices/`; the 60-second reference WAVs the backend conditions on live under the gitignored `backend_modal/voices/`.
 
 ---
 
@@ -141,7 +141,7 @@ pip install -r requirements.txt
 # Hugging Face token for the script-writing LLM (Inference API access)
 export HF_TOKEN=your_hf_token_here
 
-# Deploy the GPU backend separately (needs the gitignored backend_modal/ tree)
+# Deploy the GPU backend separately (needs the gitignored model code + voices under backend_modal/)
 # VIBEVOICE_PROFILE=tail modal deploy backend_modal/modal_runner.py
 
 python app.py          # http://localhost:7860
@@ -172,7 +172,7 @@ Required env:
 │   └── voices/            # Voice preview clips
 ├── text_examples/         # Example scripts (1–4 speakers)
 ├── tests/                 # Script-parser tests + example prompts
-└── backend_modal/         # (gitignored) Modal runner, VibeVoice model code, reference voices
+└── backend_modal/         # Modal runner (tracked); VibeVoice model code + reference voices (gitignored)
 ```
 
 ---

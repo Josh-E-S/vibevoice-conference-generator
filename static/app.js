@@ -83,7 +83,7 @@ const el = {};
   "composerCollapsedStrip", "collapsedSummary", "composerBody",
   "playerStage", "stageTitle", "stagePlayBtn", "stageWaveform", "stageTime",
   "stageDot", "stageLine", "stageSpeaker", "stageCloseBtn", "stageDownloadBtn", "stageOrbs",
-  "stageScriptToggle", "stageTranscript", "soundSeg", "soundHint", "polishStatus", "cleanNoiseCheckbox",
+  "soundSeg", "soundHint", "polishStatus", "cleanNoiseCheckbox",
   "generationTime", "audioDuration", "resultModel", "downloadBtn",
   "realtimeRow", "realtimeFactor", "warmupRow", "warmupTime",
   "downloadMp3Btn", "stageDownloadMp3Btn",
@@ -1341,9 +1341,8 @@ function buildSyncedTranscript(snapshot) {
   lastCaptionKey = "";
 
   el.syncedTranscript.innerHTML = "";
-  el.stageTranscript.innerHTML = "";
   state.resultTurns.forEach((turn, i) => {
-    state.resultTurns[i].rows = [el.syncedTranscript, el.stageTranscript].map((container) => {
+    state.resultTurns[i].rows = [el.syncedTranscript].map((container) => {
       const row = document.createElement("div");
       row.className = "sync-line";
       const dot = document.createElement("span");
@@ -1866,15 +1865,6 @@ el.openPlayerBtn.addEventListener("click", openPlayerStage);
 el.stageCloseBtn.addEventListener("click", () => el.playerStage.close());
 el.playerStage.addEventListener("click", (e) => { if (e.target === el.playerStage) el.playerStage.close(); });
 
-el.stageScriptToggle.addEventListener("click", () => {
-  el.stageTranscript.hidden = !el.stageTranscript.hidden;
-  el.stageScriptToggle.textContent = el.stageTranscript.hidden ? "View full script" : "Hide script";
-  if (!el.stageTranscript.hidden) {
-    const active = state.resultTurns[state.activeSyncIndex];
-    const target = (active && active.rows && active.rows[1]) || el.stageTranscript;
-    target.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }
-});
 
 document.addEventListener("keydown", (e) => {
   if (!el.playerStage.open || e.code !== "Space") return;
@@ -2303,12 +2293,13 @@ function resetPreview() {
   preview.nextTakeTime = 0;
   preview.normGain = 1;
   preview.done = false;
-  el.genPreviewRow.hidden = true;
+  updatePreviewUI();
 }
 
 function stopPreview(fadeSecs = 0.3) {
   preview.done = true;
   preview.active = false;
+  el.genPreviewRow.hidden = true;
   if (!preview.ctx) return;
   const ctx = preview.ctx;
   preview.ctx = null;
@@ -2439,25 +2430,40 @@ function previewPositionSeconds() {
   return pos;
 }
 
+const PREVIEW_WAITING_NOTE =
+  "Audio starts streaming here as soon as the first stretch of dialogue is rendered and passes the quality check — usually a minute or two in.";
+
 function updatePreviewUI() {
-  if (preview.done || !preview.active) return;
+  if (preview.done) return;
   el.genPreviewRow.hidden = false;
+  if (!preview.active) {
+    // Nothing is audible yet: say what will happen rather than claim playback.
+    el.genPreviewRow.classList.add("waiting");
+    el.genPreviewMute.hidden = true;
+    el.genPreviewLabel.textContent = PREVIEW_WAITING_NOTE;
+    return;
+  }
+  el.genPreviewRow.classList.remove("waiting");
+  el.genPreviewMute.hidden = false;
   const n = Math.min(preview.nextIndex, preview.total || preview.nextIndex);
+  const progressNote = preview.total ? ` · ${n} of ${preview.total} chunks rendered` : "";
   if (preview.ctx && preview.ctx.state === "suspended") {
     // Browser blocked audio start without a fresh gesture.
     el.genPreviewLabel.textContent = "Preview ready — click Unmute to listen while it renders";
+    el.genPreviewMute.textContent = "Unmute";
     return;
   }
-  el.genPreviewLabel.textContent = preview.total
-    ? `Live preview playing · ${n} of ${preview.total} chunks rendered`
-    : "Live preview playing";
+  el.genPreviewLabel.textContent = (preview.muted ? "Live preview muted" : "Live preview playing") + progressNote;
 }
 
 el.genPreviewMute.addEventListener("click", () => {
   preview.muted = !preview.muted;
   el.genPreviewMute.textContent = preview.muted ? "Unmute" : "Mute";
   if (preview.master) preview.master.gain.value = preview.muted ? 0 : preview.normGain;
-  if (preview.ctx && preview.ctx.state === "suspended") preview.ctx.resume().catch(() => {});
+  if (preview.ctx && preview.ctx.state === "suspended") {
+    preview.ctx.resume().then(updatePreviewUI).catch(() => {});
+  }
+  updatePreviewUI();
 });
 
 /* ---------------- Generate ---------------- */
@@ -2514,6 +2520,7 @@ el.generateBtn.addEventListener("click", async () => {
   el.logToggleBtn.hidden = true;
   el.logToggleBtn.textContent = "View generation log";
   startProgress();
+  ensurePreviewCtx();  // inside the click gesture: an AudioContext made here starts unblocked
   // The render is already submitted — edits here can't reach it, so lock the
   // workspace rather than let controls silently no-op, and put progress
   // front and centre.

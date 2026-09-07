@@ -203,10 +203,10 @@
             <div class="progress-fill" id="genStageFill"></div>
           </div>
           <div class="gen-stage-meta" id="genStageMeta"></div>
-          <div class="gen-preview" id="genPreviewRow" hidden>
+          <div class="gen-preview waiting" id="genPreviewRow" hidden>
             <span class="gen-preview-dot"></span>
             <span id="genPreviewLabel">Live preview</span>
-            <button class="gen-preview-mute" id="genPreviewMute" type="button">Mute</button>
+            <button class="gen-preview-mute" id="genPreviewMute" type="button" hidden>Mute</button>
           </div>
           <div class="gen-stage-desc" id="genStageDesc"></div>
           <div class="gen-stage-log" id="genStageLog"></div>
@@ -248,9 +248,7 @@
           <a class="btn btn-ink" id="stageDownloadBtn" download="chorus-audio.wav">Download WAV</a>
           <a class="btn btn-pill-outline" id="stageDownloadMp3Btn" download="chorus-audio.mp3"
              title="Much smaller file — encoded on the server on first click">MP3</a>
-          <button class="btn btn-pill-outline" id="stageScriptToggle" type="button">View full script</button>
         </div>
-        <div class="synced-transcript stage-transcript" id="stageTranscript" hidden></div>
         </div>
       </div>
     </dialog>
