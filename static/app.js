@@ -69,7 +69,7 @@ const el = {};
 [
   "runtimeStatus", "runtimeLabel", "coldNote", "browseVoicesBtn", "aboutBtn", "aboutDialog", "closeAboutBtn",
   "speakerStepper", "voiceRows", "qualityPills", "cfgScale", "cfgScaleValue",
-  "voiceConsentRow", "voiceConsentCheckbox",
+  "useConsentBlock", "useConsentCheckbox",
   "scriptPrompt", "durationSelect", "generateScriptBtn", "examplePills", "openImportBtn", "scriptGenStatus",
   "scriptTitle", "scriptDuration", "turnsList", "addTurnBtn",
   "generateBarMeta", "generateBtn",
@@ -121,6 +121,21 @@ function customVoiceForSlot(i) {
 function customColor(voice) {
   const idx = state.customVoices.indexOf(voice);
   return CUSTOM_COLORS[Math.max(0, idx) % CUSTOM_COLORS.length];
+}
+
+function downloadCustomVoice(voice) {
+  if (!voice || !voice.blob) return;
+  const type = (voice.blob.type || "").toLowerCase();
+  const ext = type.includes("wav") ? "wav" : type.includes("webm") ? "webm" : type.includes("ogg") ? "ogg"
+    : type.includes("mp4") || type.includes("m4a") ? "m4a" : type.includes("mpeg") ? "mp3" : "audio";
+  const url = URL.createObjectURL(voice.blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(voice.name || "voice").replace(/[^\w.-]+/g, "_")}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 function anyCustomVoiceActive() {
@@ -308,8 +323,44 @@ function stopVoicePreview() {
 }
 
 /* ---------------- Sidebar: cast / quality / expressiveness ---------------- */
+/* ---------------- Responsible-use gate ----------------
+   One acknowledgment covers every voice (presets, clones, the user's own).
+   Generate stays locked until it's ticked; the server logs each acceptance
+   and refuses renders that arrive without it. Kept for the tab session only,
+   so every new visit re-asks. */
+const CONSENT_VERSION = "2026-09-12";
+const CONSENT_SESSION_KEY = "chorus-use-consent";
+
+function consentAccepted() {
+  return el.useConsentCheckbox.checked;
+}
+
+function updateGenerateGate() {
+  const accepted = consentAccepted();
+  el.useConsentBlock.classList.toggle("is-accepted", accepted);
+  if (document.body.classList.contains("is-generating")) return;  // the generate handler owns the button mid-render
+  el.generateBtn.disabled = !accepted;
+  el.generateBtn.title = accepted ? "" : "Accept the responsible-use terms above to generate";
+  updateMeta();
+}
+
+el.useConsentCheckbox.addEventListener("change", () => {
+  try {
+    if (el.useConsentCheckbox.checked) sessionStorage.setItem(CONSENT_SESSION_KEY, CONSENT_VERSION);
+    else sessionStorage.removeItem(CONSENT_SESSION_KEY);
+  } catch (_) { /* storage blocked — the checkbox still works for this page */ }
+  updateGenerateGate();
+});
+
+function restoreConsent() {
+  try {
+    el.useConsentCheckbox.checked = sessionStorage.getItem(CONSENT_SESSION_KEY) === CONSENT_VERSION;
+  } catch (_) { el.useConsentCheckbox.checked = false; }
+  updateGenerateGate();
+}
+
 function updateVoiceConsentVisibility() {
-  el.voiceConsentRow.hidden = !anyCustomVoiceActive();
+  // Uploaded-voice rights are part of the single responsible-use acknowledgment now.
 }
 
 function fillEmptySlots() {
@@ -563,6 +614,13 @@ function buildCustomVoiceCard(voice) {
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
   });
 
+  const downloadBtn = document.createElement("button");
+  downloadBtn.type = "button";
+  downloadBtn.className = "voice-mini-action";
+  downloadBtn.textContent = "⤓";
+  downloadBtn.title = "Download this voice's reference clip";
+  downloadBtn.addEventListener("click", () => downloadCustomVoice(voice));
+
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
   deleteBtn.className = "voice-mini-action";
@@ -570,7 +628,7 @@ function buildCustomVoiceCard(voice) {
   deleteBtn.title = "Delete this voice";
   deleteBtn.addEventListener("click", () => deleteCustomVoice(voice));
 
-  actions.append(preview, renameBtn, deleteBtn);
+  actions.append(preview, renameBtn, downloadBtn, deleteBtn);
   head.append(name, actions);
 
   const meta = document.createElement("div");
@@ -1010,7 +1068,7 @@ function openCloneDialog(targetSlot = null) {
   el.cloneAudio.removeAttribute("src");
   el.cloneMeta.textContent = "";
   el.cloneNameInput.value = "";
-  el.cloneConsentCheckbox.checked = el.voiceConsentCheckbox.checked;
+  el.cloneConsentCheckbox.checked = consentAccepted();  // already agreed globally? prefill
   renderCloneSlots();
   updateCloneSaveLabel();
   renderCloneReplacePills();
@@ -1057,7 +1115,6 @@ el.useCloneBtn.addEventListener("click", () => {
   state.cloneTargetSlots.forEach((i) => {
     state.voiceSelections[i] = CUSTOM_PREFIX + voice.id;
   });
-  el.voiceConsentCheckbox.checked = el.cloneConsentCheckbox.checked;
   closeCloneDialog();
   renderCast();
   renderTurns();
@@ -1138,9 +1195,10 @@ function renderTurns() {
 function updateMeta() {
   const duration = estimateDuration(state.turns);
   el.scriptDuration.textContent = duration;
-  el.generateBarMeta.textContent = state.turns.length
+  const lines = state.turns.length
     ? `${state.turns.length} line${state.turns.length === 1 ? "" : "s"} · ${duration || "—"}`
     : "Add dialogue to begin";
+  el.generateBarMeta.textContent = consentAccepted() ? lines : `${lines} · accept the terms to unlock`;
 }
 
 el.addTurnBtn.addEventListener("click", () => {
@@ -2501,8 +2559,9 @@ el.generateBtn.addEventListener("click", async () => {
       return;
     }
   }
-  if (anyCustomVoiceActive() && !el.voiceConsentCheckbox.checked) {
-    alert("Confirm you have the right to use each uploaded voice before generating.");
+  if (!consentAccepted()) {
+    alert("Accept the responsible-use terms before generating.");
+    updateGenerateGate();
     return;
   }
 
@@ -2538,8 +2597,8 @@ el.generateBtn.addEventListener("click", async () => {
     );
   } catch (error) {
     setStatus("error", error.message);
-    el.generateBtn.disabled = false;
     el.generateBtn.textContent = "Generate Audio";
+    el.generateBtn.disabled = !consentAccepted();
     return;
   }
 
@@ -2550,7 +2609,9 @@ el.generateBtn.addEventListener("click", async () => {
     speakers: state.voiceSelections.map((v) => ((v || "").startsWith(CUSTOM_PREFIX) ? null : v)),
     cfg_scale: Number(el.cfgScale.value),
     custom_audio: customAudio,
-    voice_consent: el.voiceConsentCheckbox.checked,
+    voice_consent: consentAccepted(),
+    use_consent: consentAccepted(),
+    consent_version: CONSENT_VERSION,
   };
 
   generateAbort = new AbortController();
@@ -2669,8 +2730,8 @@ el.generateBtn.addEventListener("click", async () => {
     stopProgress();
     setWorkspaceEnabled(true);
     generateAbort = null;
-    el.generateBtn.disabled = false;
     el.generateBtn.textContent = "Generate Audio";
+    el.generateBtn.disabled = !consentAccepted();
   }
 });
 
@@ -2700,6 +2761,7 @@ async function init() {
   renderQuality();
   renderTurns();
   renderExamplePills();
+  restoreConsent();  // unlocks Generate only if this tab session already accepted the terms
   updateStatus();
   checkLastTake();
   window.setInterval(updateStatus, 8000);

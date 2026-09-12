@@ -13,6 +13,7 @@ import traceback
 import uuid
 from collections import defaultdict, deque
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Annotated
 
 import modal
@@ -632,6 +633,43 @@ def _enforce_rate_limit(bucket: str, request: Request | None, limit: int, window
     log.append(now)
 
 
+# --- Responsible-use consent log (2026-09-12) ---------------------------
+# Every render carries the visitor's acceptance of the responsible-use terms
+# (see the checkbox above Generate). Each acceptance is written as one JSON
+# line to CONSENT_LOG_PATH and echoed to stdout (Space logs), so a misuse
+# report can be matched to a time, IP, and the voices involved. The script
+# itself is not stored — only its SHA-256, enough to confirm a match later.
+CONSENT_LOG_PATH = Path(os.environ.get("CONSENT_LOG_PATH", str(ROOT / "data" / "consent_log.jsonl")))
+CONSENT_TEXT_VERSION = "2026-09-12"   # bump when the checkbox wording changes
+
+
+def _record_consent(request: Request, payload: "GenerateRequest", script: str,
+                    custom_audio: list, speakers: list) -> None:
+    entry = {
+        "event": "consent_accepted",
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "consent_version": payload.consent_version or "unknown",
+        "current_version": CONSENT_TEXT_VERSION,
+        "ip": _client_ip(request),
+        "user_agent": (request.headers.get("user-agent") or "")[:200],
+        "model": payload.model,
+        "num_speakers": payload.num_speakers,
+        "preset_voices": [v for v in speakers[: payload.num_speakers] if v],
+        "cloned_voices": sum(1 for a in custom_audio[: payload.num_speakers] if a is not None),
+        "voice_consent": payload.voice_consent,
+        "words": len(script.split()),
+        "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest(),
+    }
+    line = json.dumps(entry, separators=(",", ":"))
+    print(f"CONSENT {line}", flush=True)
+    try:
+        CONSENT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with CONSENT_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError as exc:  # read-only FS etc. — stdout still has it
+        print(f"CONSENT_LOG_WRITE_FAILED {exc}", flush=True)
+
+
 def _audio_budget_remaining() -> int:
     now = time.time()
     log = _RATE_LOG[f"audio-day:{GLOBAL_KEY}"]
@@ -866,7 +904,9 @@ class GenerateRequest(BaseModel):
     speakers: list[str | None]
     cfg_scale: float
     custom_audio: list[str | None] = [None, None, None, None]  # base64 (or data: URI), one per slot
-    voice_consent: bool = False
+    voice_consent: bool = False      # legacy field: rights to uploaded voices (now part of use_consent)
+    use_consent: bool = False        # the responsible-use acknowledgment covering every voice
+    consent_version: str = ""        # text version the visitor accepted (client constant)
 
 
 @app.post("/api/generate")
@@ -893,11 +933,17 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
     speakers = (list(payload.speakers) + [None, None, None, None])[:4]
     custom_audio_raw = (list(payload.custom_audio) + [None, None, None, None])[:4]
     custom_audio = [_decode_custom_audio(v, i) for i, v in enumerate(custom_audio_raw)]
+    if not payload.use_consent:
+        raise HTTPException(
+            status_code=400,
+            detail="Accept the responsible-use terms before generating.",
+        )
     if any(a is not None for a in custom_audio) and not payload.voice_consent:
         raise HTTPException(
             status_code=400,
             detail="Confirm you have the right to use each uploaded voice before generating.",
         )
+    _record_consent(request, payload, script, custom_audio, speakers)
 
     # Only pass custom_audio kwargs when a clone is actually in use, so preset-voice
     # generations still work against a deployed backend that predates the parameters.
