@@ -1999,7 +1999,7 @@ function paintProgress() {
     let warm;
     if (expectedWarmup && elapsed > 10) {
       // Ramp toward the last observed cold start — an estimate in motion beats
-      // a bare sweep that looks frozen for three minutes.
+      // a bare sweep that looks frozen for half a minute.
       const width = `${(Math.min(0.95, elapsed / expectedWarmup) * 100).toFixed(1)}%`;
       el.progressTrack.classList.remove("indeterminate");
       el.genStageTrack.classList.remove("indeterminate");
@@ -2010,7 +2010,7 @@ function paintProgress() {
       el.progressTrack.classList.add("indeterminate");
       el.genStageTrack.classList.add("indeterminate");
       warm = `GPU warming up · ${formatMinutes(elapsed) || "0s"}` +
-        (elapsed > 20 ? " — a cold start loads the whole model, usually a few minutes" : "");
+        (elapsed > 20 ? " — a cold start restores the model snapshot, usually about half a minute" : "");
     }
     el.progressMeta.textContent = warm;
     el.genStagePct.textContent = "Warming up…";

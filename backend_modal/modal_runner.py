@@ -17,7 +17,7 @@ import modal
 # --- Scaling profiles (2026-09-06) ---------------------------------------
 # Chosen at deploy time:  VIBEVOICE_PROFILE=launch modal deploy backend_modal/modal_runner.py
 # "launch": one container always hot + one pre-warmed buffer under load, so a
-#           public-post burst lands warm instead of paying the ~3 min model load.
+#           public-post burst lands warm instead of paying the ~30 s snapshot restore.
 # "tail":   scale to zero when idle (default). Same cap and idle window, so the
 #           only thing that changes is the standing spend.
 # max_containers is the spending cap in both: a 5th concurrent request queues
@@ -30,6 +30,32 @@ SCALING_PROFILE = os.environ.get("VIBEVOICE_PROFILE", "tail").strip().lower()
 if SCALING_PROFILE not in SCALING_PROFILES:
     raise SystemExit(f"VIBEVOICE_PROFILE must be one of {sorted(SCALING_PROFILES)}, got {SCALING_PROFILE!r}")
 print(f"Deploying with scaling profile '{SCALING_PROFILE}': {SCALING_PROFILES[SCALING_PROFILE]}")
+
+MODEL_PATHS = {
+    "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B",
+    "VibeVoice-7B": "vibevoice/VibeVoice-7B",
+}
+
+
+# The processor loads its text tokenizer from the Qwen repo named in each
+# checkpoint's preprocessor_config.json ("language_model_pretrained_name"), so
+# those must ship in the image too (2026-09-12: the first bake missed them and
+# the deploy crash-looped on "Can't load tokenizer for 'Qwen/Qwen2.5-1.5B'").
+TOKENIZER_REPOS = ["Qwen/Qwen2.5-1.5B", "Qwen/Qwen2.5-7B"]
+
+
+def _bake_weights():
+    """Image build step: pull both checkpoints and their tokenizers into HF_HOME
+    so nothing is fetched from the Hub at container start."""
+    from huggingface_hub import snapshot_download
+    for repo in MODEL_PATHS.values():
+        print(f"Baking {repo} into image ...")
+        snapshot_download(repo)
+    for repo in TOKENIZER_REPOS:
+        print(f"Baking tokenizer files from {repo} into image ...")
+        # json/txt only: tokenizer.json, vocab.json, merges.txt, configs — not the LLM weights
+        snapshot_download(repo, allow_patterns=["*.json", "*.txt"])
+
 
 # Define the Modal Stub
 image = (
@@ -58,6 +84,14 @@ image = (
     )
     .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})  # fights fragmentation across waves
     .env({"VIBEVOICE_PROFILE": SCALING_PROFILE})  # so container logs name the profile they run under
+    # Bake both checkpoints (~17 GB) plus tokenizers into the image at build
+    # time. Before this (2026-09-12) every cold container re-downloaded them from
+    # the Hub inside @modal.enter, which was most of the 110-180 s cold start.
+    # Not HF_HUB_OFFLINE on purpose: with everything cached, from_pretrained only
+    # does cheap etag checks, falls back to the cache if the Hub is unreachable,
+    # and any file the bake missed downloads instead of crash-looping the app.
+    .env({"HF_HOME": "/root/hf_home"})
+    .run_function(_bake_weights)
     .add_local_dir("backend_modal/modular", remote_path="/root/modular")
     .add_local_dir("backend_modal/processor", remote_path="/root/processor")
     .add_local_dir("backend_modal/voices", remote_path="/root/voices")
@@ -88,16 +122,21 @@ cache_volume = modal.Volume.from_name("vibevoice-cache", create_if_missing=True)
                    # with cloned voices runs slower than the preset-voice record
                    # pace (bigger reference prefill per chunk), so give 2h.
     volumes={"/cache": cache_volume},
+    # Cold-start work (2026-09-12): the process is checkpointed right after both
+    # models are loaded to CPU RAM (@modal.enter(snap=True)). A cold container
+    # restores that checkpoint instead of re-running from_pretrained, then only
+    # pays the CPU->GPU copy (@modal.enter(snap=False)). GPUs are not attached
+    # during the snapshot phase, so nothing there may touch CUDA.
+    enable_memory_snapshot=True,
+    memory=40 * 1024,  # MiB; both checkpoints in bf16 (~17 GB) sit in RAM before the GPU copy
     **SCALING_PROFILES[SCALING_PROFILE],
 )
 class VibeVoiceModel:
-    @modal.enter()
+    @modal.enter(snap=True)
     def load_models(self):
-        """Run once when the container starts. Loads both models to GPU."""
-        self.model_paths = {
-            "VibeVoice-1.5B": "microsoft/VibeVoice-1.5B",
-            "VibeVoice-7B": "vibevoice/VibeVoice-7B",
-        }
+        """Snapshot phase: load both models to CPU. Captured once per deploy,
+        restored on every later cold start. No CUDA here (no GPU attached)."""
+        self.model_paths = MODEL_PATHS
         self.device = "cuda"
         self.inference_steps = 5
         self.cache_dir = "/cache"
@@ -107,10 +146,40 @@ class VibeVoiceModel:
         from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
         from processor.vibevoice_processor import VibeVoiceProcessor
 
+        snap_started = time.time()
+        print(f"SNAPSHOT_START profile={SCALING_PROFILE} at={datetime.utcnow().isoformat()}Z "
+              "— loading models to CPU for the memory snapshot...")
+
+        self.models = {}
+        self.processors = {}
+        self.current_model_name = None
+
+        for name, path in self.model_paths.items():
+            print(f" - Loading {name} from {path} (baked into image)")
+            proc = VibeVoiceProcessor.from_pretrained(path)
+            mdl = VibeVoiceForConditionalGenerationInference.from_pretrained(
+                path,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="sdpa"
+            )
+            mdl.eval()
+            print(f"  {name} loaded to CPU")
+            self.processors[name] = proc
+            self.models[name] = mdl
+
+        # Set default model
+        self.current_model_name = "VibeVoice-1.5B"
+        self.setup_voice_presets()
+        print(f"SNAPSHOT_READY load_seconds={time.time() - snap_started:.0f}")
+
+    @modal.enter(snap=False)
+    def move_to_gpu(self):
+        """Restore phase: runs on every container start (after a snapshot restore,
+        or right after load_models the one time the snapshot is created)."""
         self.boot_started = time.time()
         print(f"CONTAINER_START profile={SCALING_PROFILE} at={datetime.utcnow().isoformat()}Z "
-              "— loading models to GPU...")
-        
+              "— moving models to GPU...")
+
         # Set compiler flags for better performance
         if torch.cuda.is_available() and hasattr(torch, '_inductor'):
             if hasattr(torch._inductor, 'config'):
@@ -119,28 +188,11 @@ class VibeVoiceModel:
                 torch._inductor.config.epilogue_fusion = False
                 torch._inductor.config.coordinate_descent_check_all_directions = True
 
-        self.models = {}
-        self.processors = {}
-        self.current_model_name = None
-        
-        # Load all models directly to GPU (A100-40GB holds both; ~17 GB baseline)
-        for name, path in self.model_paths.items():
-            print(f" - Loading {name} from {path}")
-            proc = VibeVoiceProcessor.from_pretrained(path)
-            mdl = VibeVoiceForConditionalGenerationInference.from_pretrained(
-                path, 
-                torch_dtype=torch.bfloat16,
-                attn_implementation="sdpa"
-            ).to(self.device)  # Load directly to GPU
-            mdl.eval()
-            print(f"  {name} loaded to {self.device}")
-            self.processors[name] = proc
-            self.models[name] = mdl
-        
-        # Set default model
-        self.current_model_name = "VibeVoice-1.5B"
+        # A100-40GB holds both; ~24 GB baseline (2.7B + 9.3B params in bf16, measured 24.1 GB on 2026-09-12)
+        for name, mdl in self.models.items():
+            self.models[name] = mdl.to(self.device)
+            print(f"  {name} on {self.device}")
 
-        self.setup_voice_presets()
         self.ready_at = time.time()  # for cold-start detection in timing reports
         self.jobs_served = 0
         print(f"CONTAINER_READY load_seconds={self.ready_at - self.boot_started:.0f}")
@@ -1367,3 +1419,17 @@ class VibeVoiceModel:
                 status="Generation failed.",
                 log_text=error_msg,
             )
+
+
+@app.local_entrypoint()
+def boot_check(deployed: bool = False):
+    """`modal run backend_modal/modal_runner.py`: boot one container and report the
+    load path without generating anything. Ephemeral by default; pass
+    `--deployed` to poke the deployed app instead (this is what creates, and then
+    exercises, its memory snapshot). Watch `modal app logs vibevoice-generator`
+    for CONTAINER_READY load_seconds=."""
+    t0 = time.time()
+    cls = modal.Cls.from_name("vibevoice-generator", "VibeVoiceModel") if deployed else VibeVoiceModel
+    scripts, _ = cls().get_example_scripts.remote()
+    print(f"boot_check: container answered in {time.time() - t0:.0f}s, "
+          f"{len(scripts)} example scripts")

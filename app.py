@@ -727,7 +727,7 @@ async def _backend_stats() -> dict | None:
 @app.get("/api/status")
 async def api_status() -> dict:
     """Backend reachability plus, when Modal reports it, whether a GPU container
-    is already hot — the UI uses that to warn about the ~3 min cold path."""
+    is already hot — the UI uses that to warn about the ~30 s cold path (snapshot restore + GPU copy)."""
     payload = {
         "backend": "ready" if remote_generate_function is not None else "offline",
         "daily_remaining": _audio_budget_remaining(),
