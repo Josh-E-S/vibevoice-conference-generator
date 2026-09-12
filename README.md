@@ -36,7 +36,7 @@ _A 3-speaker example — Wizard, Orc, and Mom — generated from a single senten
 - **Gender-aware casting** — characters get a matching voice automatically, with one-click override
 
 **Voices**
-- **16 preset voices** — twelve public-domain voices (pre-1923 recordings and LibriVox readers) plus four originals, each with a preview clip
+- **17 preset voices** — twelve public-domain voices (pre-1923 recordings and LibriVox readers) plus five originals, including the author's own narration voice as the default Speaker 1, each with a preview clip
 - **Clone a voice** — record in the browser or upload a clip; the first 30 seconds become the reference. Clones are kept in your browser (IndexedDB) and never stored server-side
 - **Two model sizes** — VibeVoice-1.5B (Fast) and VibeVoice-7B (Best)
 - **Expressiveness** control (classifier-free guidance scale)
@@ -111,6 +111,7 @@ VibeVoice is Microsoft's open-source long-form, multi-speaker TTS model. It uses
 
 | Voice | Gender | Character | Source |
 | --- | :---: | --- | --- |
+| Josh | M | Narration, Creator | Original — the author's own voice, recorded in-app |
 | Cylinder | M | Antique, 1900s | Public domain (pre-1923 recording) |
 | Statesman | M | Historic, Orator | Public domain (pre-1923 recording) |
 | Novella | F | Classic, Reader | Public domain (pre-1923 recording) |

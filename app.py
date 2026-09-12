@@ -34,6 +34,9 @@ AVAILABLE_MODELS = ["VibeVoice-1.5B", "VibeVoice-7B"]
 # Dict order is presentation order in the UI voice library.
 VOICE_INFO = {
     # Public-domain additions (2026-08-31): pre-1923 US recordings and
+    # The author's own narration voice (recorded in-app, exported 2026-09-12).
+    # Listed first so it's the default Speaker 1 in the cast and in API fallbacks.
+    "Josh": {"gender": "M", "tags": ["Narration", "Creator"], "color": "#B03A2E"},
     # LibriVox readings, prepared as 60 s 24 kHz mono references.
     "Cylinder": {"gender": "M", "tags": ["Antique", "1900s"], "color": "#8A6D3B"},
     "Statesman": {"gender": "M", "tags": ["Historic", "Orator"], "color": "#3A7CA5"},
@@ -55,7 +58,7 @@ VOICE_INFO = {
 }
 VOICE_GENDERS = {name: info["gender"] for name, info in VOICE_INFO.items()}
 AVAILABLE_VOICES = list(VOICE_GENDERS.keys())
-DEFAULT_SPEAKERS = ["Cylinder", "Statesman", "Novella", "Eyre"]
+DEFAULT_SPEAKERS = ["Josh", "Statesman", "Novella", "Eyre"]
 
 SCRIPT_GEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 WORDS_PER_MINUTE = 150             # Matches the pace assumed by the client's duration estimate
