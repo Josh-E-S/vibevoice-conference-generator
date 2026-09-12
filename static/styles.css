@@ -599,12 +599,22 @@ select:focus { outline: none; border-color: #d9a98c; }
 .add-turn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---------------- Sticky generate bar ---------------- */
+/* Consent block + Generate pill stick to the bottom together, so the pill
+   never slides over the terms mid-scroll. */
+.generate-dock {
+  position: sticky;
+  bottom: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
 .use-consent {
   border: 1px solid var(--speaker-3);
-  background: rgba(204, 138, 46, 0.08);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 100vmax rgba(204, 138, 46, 0.08);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
-  margin: 12px 0 10px;
 }
 .use-consent label {
   display: flex;
@@ -618,12 +628,10 @@ select:focus { outline: none; border-color: #d9a98c; }
 .use-consent input[type="checkbox"] { margin-top: 3px; flex-shrink: 0; }
 .use-consent strong { color: var(--ink); }
 .use-consent em { display: block; margin-top: 4px; color: var(--ink-ghost); font-style: normal; }
-.use-consent.is-accepted { border-color: var(--border); background: transparent; }
+.use-consent.is-accepted { border-color: var(--border); box-shadow: none; }
 .use-consent.is-accepted em { display: none; }
 
 .generate-bar {
-  position: sticky;
-  bottom: 22px;
   background: var(--paper);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
