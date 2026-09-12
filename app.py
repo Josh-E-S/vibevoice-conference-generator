@@ -568,7 +568,27 @@ def _encode_wav(sample_rate: int, audio: np.ndarray) -> bytes:
 AUDIO_STORE: dict[str, tuple[float, bytes]] = {}
 
 
-LAST_AUDIO: dict = {}  # {"audio_id", "created", "duration"} of the newest finished take
+# Newest finished take PER VISITOR, so "Recover last take" only ever offers
+# someone their own render (2026-09-12: it used to be one global slot, which
+# let any visitor recover whoever rendered last). The visitor key is the
+# random id the client keeps in localStorage and sends as X-Chorus-Visitor;
+# without one (old clients, curl) it falls back to the client IP.
+LAST_TAKES: dict[str, dict] = {}  # owner -> {"audio_id", "created", "duration"}
+LAST_TAKE_MAX_AGE_SECONDS = 6 * 3600  # bound the map: forget owners after 6 h
+_VISITOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def _take_owner(request: Request) -> str:
+    vid = (request.headers.get("x-chorus-visitor") or "").strip()
+    if _VISITOR_ID_RE.match(vid):
+        return f"vid:{vid}"
+    return f"ip:{_client_ip(request)}"
+
+
+def _prune_last_takes() -> None:
+    cutoff = time.time() - LAST_TAKE_MAX_AGE_SECONDS
+    for owner in [o for o, t in LAST_TAKES.items() if t["created"] < cutoff]:
+        LAST_TAKES.pop(owner, None)
 
 
 # Per-generation streamed chunks, so playback can start while later waves
@@ -585,13 +605,14 @@ def _prune_stream_chunks() -> None:
 
 def _prune_audio_store() -> None:
     now = time.time()
-    keep = LAST_AUDIO.get("audio_id")
-    # Never prune the most recent take: a lost page/tab must not orphan an
-    # hour-long render (learned the hard way, 2026-08-20). It is only evicted
-    # when a newer take replaces it.
+    _prune_last_takes()
+    keep = {t["audio_id"] for t in LAST_TAKES.values()}
+    # Never prune a visitor's most recent take: a lost page/tab must not orphan
+    # an hour-long render (learned the hard way, 2026-08-20). It is only evicted
+    # when a newer take replaces it or its owner entry ages out.
     stale = [
         k for k, (ts, _) in AUDIO_STORE.items()
-        if now - ts > AUDIO_TTL_SECONDS and k != keep
+        if now - ts > AUDIO_TTL_SECONDS and k not in keep
     ]
     for k in stale:
         AUDIO_STORE.pop(k, None)
@@ -947,6 +968,7 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
             detail="Confirm you have the right to use each uploaded voice before generating.",
         )
     _record_consent(request, payload, script, custom_audio, speakers)
+    take_owner = _take_owner(request)
 
     # Only pass custom_audio kwargs when a clone is actually in use, so preset-voice
     # generations still work against a deployed backend that predates the parameters.
@@ -1023,8 +1045,7 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
                     AUDIO_STORE[audio_id] = (time.time(), wav_bytes)
                     event["audio_id"] = audio_id
                     event["audio_duration"] = len(audio_array) / float(sample_rate)
-                    LAST_AUDIO.clear()
-                    LAST_AUDIO.update(
+                    LAST_TAKES[take_owner] = dict(
                         audio_id=audio_id,
                         created=time.time(),
                         duration=event["audio_duration"],
@@ -1035,14 +1056,17 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
 
 
 @app.get("/api/last-take")
-async def api_last_take() -> dict:
-    """The newest finished take, so a lost page can recover its render."""
-    if not LAST_AUDIO or LAST_AUDIO.get("audio_id") not in AUDIO_STORE:
+async def api_last_take(request: Request) -> dict:
+    """This visitor's newest finished take, so a lost page can recover its render.
+    Never anyone else's: the lookup is keyed by the caller's visitor id / IP."""
+    _prune_last_takes()
+    take = LAST_TAKES.get(_take_owner(request))
+    if not take or take["audio_id"] not in AUDIO_STORE:
         raise HTTPException(status_code=404, detail="No recent take.")
     return {
-        "audio_id": LAST_AUDIO["audio_id"],
-        "age_seconds": round(time.time() - LAST_AUDIO["created"]),
-        "duration": LAST_AUDIO["duration"],
+        "audio_id": take["audio_id"],
+        "age_seconds": round(time.time() - take["created"]),
+        "duration": take["duration"],
     }
 
 

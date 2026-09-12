@@ -2297,9 +2297,27 @@ async function presentTake(audioId, durationSeconds, snapshot, anchors = null) {
 
 /* On load: if the server still holds a finished take this page doesn't know
    about (lost tab, accidental navigation), offer to recover it. */
+/* A random per-browser id so the server can hand "Recover last take" only to
+   the visitor who rendered it. Lives in localStorage (per origin, and per
+   embed when the app is framed), never identifies a person. */
+function visitorId() {
+  try {
+    let id = localStorage.getItem("chorus-visitor-id");
+    if (!id || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      id = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+      localStorage.setItem("chorus-visitor-id", id);
+    }
+    return id;
+  } catch (_) {
+    return "";  // storage blocked: the server falls back to the IP address
+  }
+}
+
 async function checkLastTake() {
   try {
-    const res = await fetch("/api/last-take", { cache: "no-store" });
+    const res = await fetch("/api/last-take", { cache: "no-store", headers: { "X-Chorus-Visitor": visitorId() } });
     if (!res.ok) return;
     const info = await res.json();
     const age = info.age_seconds < 120
@@ -2618,7 +2636,7 @@ el.generateBtn.addEventListener("click", async () => {
   try {
     const response = await fetch("/api/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Chorus-Visitor": visitorId() },
       body: JSON.stringify(payload),
       signal: generateAbort.signal,
     });
