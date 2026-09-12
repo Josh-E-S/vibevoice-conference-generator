@@ -66,6 +66,8 @@ DURATION_OPTIONS_MINUTES = [1, 2, 5, 10, 15, 20, 30, 45]  # 45 × 150 wpm fits M
 MAX_COMPLETION_TOKENS = 8192       # Good-faith ceiling for a single chat_completion call; the
                                     # underlying provider may cap lower, in which case the longest
                                     # duration options may come back shorter than requested
+APP_VERSION = "1.1.0"              # shown under the title; bump with user-visible changes
+APP_VERSION_DATE = "2026-09-12"    # 1.1.0: 30 s cold starts, responsible-use gate, Josh preset, per-visitor recovery
 MAX_SCRIPT_WORDS = 7000           # Public cap (2026-09-07, launch): ~45 min of audio, ~8 min of A100
                                    # time per job. The backend itself has no ceiling — record-length
                                    # renders call Modal directly and bypass this guard.
@@ -792,6 +794,8 @@ async def api_status() -> dict:
     is already hot — the UI uses that to warn about the ~30 s cold path (snapshot restore + GPU copy)."""
     payload = {
         "backend": "ready" if remote_generate_function is not None else "offline",
+        "version": APP_VERSION,
+        "version_date": APP_VERSION_DATE,
         "daily_remaining": _audio_budget_remaining(),
         "max_script_words": MAX_SCRIPT_WORDS,
     }

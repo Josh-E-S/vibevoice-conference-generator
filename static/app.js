@@ -72,7 +72,7 @@ const el = {};
   "useConsentBlock", "useConsentCheckbox",
   "scriptPrompt", "durationSelect", "generateScriptBtn", "examplePills", "openImportBtn", "scriptGenStatus",
   "scriptTitle", "scriptDuration", "turnsList", "addTurnBtn",
-  "generateBarMeta", "generateBtn",
+  "generateBarMeta", "generateBtn", "appVersion",
   "statusCard", "statusTitle", "statusDesc", "stopGenBtn",
   "progressTrack", "progressFill", "progressMeta",
   "stageGenPane", "stagePlayPane", "genStageTitle", "genStagePct", "genStageTrack",
@@ -253,6 +253,10 @@ async function updateStatus() {
   try {
     const res = await fetch("/api/status", { cache: "no-store" });
     const payload = await res.json();
+    if (payload.version && el.appVersion.textContent !== `v${payload.version}`) {
+      el.appVersion.textContent = `v${payload.version}`;
+      el.appVersion.title = payload.version_date ? `Released ${payload.version_date}` : "";
+    }
     const ready = payload.backend === "ready";
     el.runtimeStatus.classList.toggle("ready", ready);
     // "warm" is reported only when Modal exposes live container counts. Known
