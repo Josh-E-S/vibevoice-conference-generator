@@ -58,6 +58,7 @@ Rendering a long script in one pass makes VibeVoice drift in rate and quality. C
 2. Renders chunks in batched waves on one A100 (12 at a time for 1.5B, 6 for 7B), backing off to smaller waves on out-of-memory
 3. Runs a quality gate on every chunk — speaking-rate band, silence fraction, spectral flatness, and a replay detector for cloned voices — and re-rolls failures on a fresh seed
 4. Crossfades chunks together (0.25 s seams) and measures each turn's onset from the audio for the synced transcript
+5. Once the full take lands, evens out section-to-section loudness with a slow gain ride (4 s windows, at most ±6 dB, soft-limited), so playback and every export sit at a consistent level from start to finish
 
 Measured on production (A100-40GB, VibeVoice-1.5B):
 

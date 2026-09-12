@@ -1044,6 +1044,11 @@ async def api_generate(payload: GenerateRequest, request: Request) -> StreamingR
                 audio_payload = event.pop("audio", None)
                 if audio_payload is not None:
                     sample_rate, audio_array = audio_payload
+                    try:
+                        audio_array, level_stats = _level_take(sample_rate, audio_array)
+                        print(f"LEVELED take {level_stats}", flush=True)
+                    except Exception as level_err:  # never lose a take to post-processing
+                        print(f"Take leveling failed (serving as generated): {level_err}", flush=True)
                     wav_bytes = _encode_wav(sample_rate, audio_array)
                     audio_id = uuid.uuid4().hex
                     AUDIO_STORE[audio_id] = (time.time(), wav_bytes)
@@ -1168,6 +1173,95 @@ def _gated_loudness_db(frame_rms: np.ndarray) -> float | None:
         return None
     gated = float(np.sqrt(np.mean(np.square(active))))
     return 20 * np.log10(max(gated, 1e-9))
+
+
+# --- Take leveling (2026-09-12) ---------------------------------------------
+# A take is stitched from chunks rendered independently, and the model's
+# delivery level drifts from chunk to chunk (and within long monologues), so
+# a single normalization gain leaves sections that are noticeably louder or
+# quieter than their neighbours. Once the full take lands, ride a slow gain
+# envelope over it: measure speech loudness in overlapping windows, nudge each
+# window toward the take's median loudness (never more than LEVEL_MAX_DB
+# either way), interpolate the gains smoothly so nothing pumps, and soft-limit
+# peaks. Overall loudness is left where it was — the Studio sound mode still
+# owns the delivery target — so this only evens the ride, not the level.
+LEVEL_WINDOW_S = 3.0      # loudness window
+LEVEL_HOP_S = 1.0         # window hop (3 s windows every second)
+LEVEL_MAX_DB = 8.0        # cap on per-window correction
+LEVEL_FRAME_S = 0.4       # RMS frame (matches _gated_loudness_db)
+LEVEL_KNEE = 0.8          # soft limiter knee after gain
+
+
+def _level_take(sample_rate: int, audio: np.ndarray) -> tuple[np.ndarray, dict]:
+    """Even out section-to-section loudness across a finished take.
+
+    Returns int16 samples and a stats dict; the input is returned unchanged
+    (as int16) when the take is too short to have more than one window.
+    """
+    x = np.asarray(audio)
+    if x.ndim > 1:
+        x = x[:, 0]
+    if x.dtype.kind == "f":
+        xf = np.clip(x, -1.0, 1.0).astype(np.float32)
+    else:
+        xf = (x.astype(np.float32) / 32768.0)
+    n = len(xf)
+    untouched = x if x.dtype == np.int16 else _to_int16(xf)
+    frame = max(1, int(LEVEL_FRAME_S * sample_rate))
+    n_frames = n // frame
+    if n_frames < 2:
+        return untouched, {"windows": 0}
+    frame_rms = np.sqrt(np.mean(np.square(xf[: n_frames * frame].reshape(-1, frame)), axis=1))
+
+    win_f = max(1, int(round(LEVEL_WINDOW_S / LEVEL_FRAME_S)))
+    hop_f = max(1, int(round(LEVEL_HOP_S / LEVEL_FRAME_S)))
+    starts = list(range(0, max(1, n_frames - win_f + 1), hop_f))
+    if len(starts) < 2:
+        return untouched, {"windows": len(starts)}
+    # Gate against the whole take's loudest frames so a quiet window full of
+    # pauses isn't measured (and boosted) as speech.
+    thresh = max(float(frame_rms.max()) * 10 ** (NORM_GATE_DB / 20), 10 ** (NORM_GATE_FLOOR / 20))
+    centers, louds = [], []
+    for s0 in starts:
+        seg = frame_rms[s0:s0 + win_f]
+        active = seg[seg >= thresh]
+        if active.size < max(2, win_f // 4):  # mostly silence: no opinion here
+            continue
+        centers.append((s0 + min(win_f, n_frames - s0) / 2.0) * frame)
+        louds.append(20 * np.log10(max(float(np.sqrt(np.mean(np.square(active)))), 1e-9)))
+    if len(louds) < 2:
+        return untouched, {"windows": len(starts), "speech_windows": len(louds)}
+    louds_arr = np.asarray(louds)
+    target = float(np.median(louds_arr))
+    gains_db = np.clip(target - louds_arr, -LEVEL_MAX_DB, LEVEL_MAX_DB)
+    # Smooth across neighbours so one odd window can't swing the envelope.
+    if len(gains_db) >= 3:
+        gains_db = np.convolve(np.pad(gains_db, 1, mode="edge"), np.array([0.25, 0.5, 0.25]), mode="valid")
+    gains = 10 ** (gains_db / 20)
+
+    out = np.empty(n, dtype=np.int16)
+    block = POLISH_BLOCK_SECONDS * sample_rate
+    for b in range(0, n, block):
+        idx = np.arange(b, min(n, b + block), dtype=np.float64)
+        y = xf[b:b + len(idx)] * np.interp(idx, centers, gains).astype(np.float32)
+        mag = np.abs(y)
+        over = mag > LEVEL_KNEE
+        if over.any():
+            excess = (mag[over] - LEVEL_KNEE) / (1.0 - LEVEL_KNEE)
+            y[over] = np.sign(y[over]) * (LEVEL_KNEE + (1.0 - LEVEL_KNEE) * np.tanh(excess))
+        out[b:b + len(idx)] = _to_int16(y)
+    stats = {
+        "windows": len(starts),
+        "speech_windows": len(louds),
+        "spread_before_db": round(float(louds_arr.max() - louds_arr.min()), 1),
+        "gain_min_db": round(float(gains_db.min()), 1),
+        "gain_max_db": round(float(gains_db.max()), 1),
+    }
+    return out, stats
+
+
+def _to_int16(y: np.ndarray) -> np.ndarray:
+    return (np.clip(y, -1.0, 1.0) * 32767.0).astype(np.int16)
 
 
 # Noise cleanup: STFT spectral gating. The noise print is the per-bin 10th

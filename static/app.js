@@ -1638,7 +1638,7 @@ el.resultAudio.addEventListener("loadedmetadata", updatePlaybackUI);
    optional tone shelf. Applied live through a small Web Audio graph, and
    downloads are rendered server-side with the same settings. */
 const SOUND_MODES = {
-  original: { tone: "neutral", norm: false, hint: "The untouched take, exactly as generated" },
+  original: { tone: "neutral", norm: false, hint: "The take as generated — section levels evened, nothing else touched" },
   studio: { tone: "neutral", norm: true, hint: "Loudness normalized to −16 LUFS podcast standard" },
   warm: { tone: "warm", norm: true, hint: "Normalized · warm tone — richer lows, softer highs" },
   bright: { tone: "bright", norm: true, hint: "Normalized · bright tone — crisper, more present" },
