@@ -60,6 +60,10 @@ def _bake_weights():
 # Define the Modal Stub
 image = (
     modal.Image.debian_slim(python_version="3.10")
+    # ffmpeg: libsndfile only reads WAV/FLAC/OGG/MP3. Phone recordings and
+    # iMovie/QuickTime exports arrive as MOV/MP4/M4A (AAC); read_audio hands
+    # those to ffmpeg when soundfile says "Format not recognised".
+    .apt_install("ffmpeg")
     .pip_install(
         "torch",
         "accelerate==1.6.0",
@@ -448,14 +452,47 @@ class VibeVoiceModel:
             print(f"Reference denoise failed (using clip as-is): {e}")
             return x
 
+    @staticmethod
+    def _decode_with_ffmpeg(data: bytes, target_sr: int) -> tuple:
+        """Decode any container/codec ffmpeg knows (MOV, MP4, M4A, AAC, WebM,
+        Opus, ...) to float32 mono at target_sr. Goes through a temp file, not a
+        pipe: MOV/MP4 often keep their index (moov atom) at the end of the file,
+        which ffmpeg cannot seek back to on stdin."""
+        import subprocess
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".clip") as tmp:
+            tmp.write(data)
+            tmp.flush()
+            proc = subprocess.run(
+                ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+                 "-i", tmp.name, "-vn", "-ac", "1", "-ar", str(target_sr),
+                 "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"],
+                capture_output=True, timeout=120, check=False,
+            )
+        if proc.returncode != 0 or not proc.stdout:
+            err = proc.stderr.decode(errors="replace").strip()[-300:]
+            raise ValueError(f"ffmpeg could not decode the clip: {err or 'no audio stream'}")
+        return np.frombuffer(proc.stdout, dtype=np.float32).copy(), target_sr
+
     def read_audio(self, audio_source, target_sr: int = 24000) -> np.ndarray:
         """audio_source is a file path (preset) or raw audio bytes (user-uploaded clone)."""
         try:
             is_clone = isinstance(audio_source, (bytes, bytearray))
             label = "uploaded clone" if is_clone else audio_source
+            raw_bytes = bytes(audio_source) if is_clone else None
             if is_clone:
                 audio_source = io.BytesIO(audio_source)
-            wav, sr = sf.read(audio_source)
+            try:
+                wav, sr = sf.read(audio_source)
+            except Exception as sf_err:
+                if not is_clone:
+                    raise
+                # 2026-11-24: an iMovie .mov clone died here with "Format not
+                # recognised" — libsndfile has no MOV/MP4/AAC support. The
+                # browser only converts to WAV when it can decode the file
+                # itself, so whatever it couldn't decode lands here raw.
+                print(f"soundfile could not read {label} ({sf_err}); decoding with ffmpeg")
+                wav, sr = self._decode_with_ffmpeg(raw_bytes, target_sr)
             if len(wav.shape) > 1:
                 wav = np.mean(wav, axis=1)
             if sr != target_sr:

@@ -1012,14 +1012,15 @@ el.cloneFileInput.addEventListener("change", async () => {
     state.cloneRawBuffer = raw;
     setCloneClip(blob, file.name, duration);
   } catch {
-    // Undecodable in this browser — pass the raw file through; the backend may still read it.
+    // Undecodable in this browser — pass the raw file through; the backend
+    // extracts the audio track with ffmpeg (MOV/MP4/M4A/WebM all work).
     state.cloneRawBuffer = null;
     state.cloneBlob = file;
     state.cloneName = file.name;
     state.cloneDuration = CLONE_GOOD_SECONDS;
     el.cloneAudio.removeAttribute("src");
     el.clonePreview.hidden = false;
-    el.cloneMeta.textContent = `${file.name} — couldn't preview this format; it will be sent as-is.`;
+    el.cloneMeta.textContent = `${file.name} — can't preview this format here; the server will pull the audio track out of it.`;
     updateCloneConfirm();
   }
 });
